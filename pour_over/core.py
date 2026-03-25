@@ -107,7 +107,11 @@ def simulate_brew(
         # 結論：dm/dt 項在展開後「自然相消」，現有簡化公式完全等價於完整焓平衡。
         V_liq_t = max(params.phi * (np.pi / 3) * params._tan2 * h**3,
                       params.V_liquid * 0.05)
-        V_eff_T = V_liq_t + params.V_equiv_coffee * (1.0 - sat)
+        # 修正 Bug [熱慣性]：咖啡粉固體熱容為常駐項，不隨 sat 消失。
+        # 舊版 V_equiv_coffee × (1-sat) 在 sat→1 時錯誤移除粉體熱容，
+        # 導致第一注完成瞬間分母縮小，引發虛假溫度跳變並低估後段降溫效果。
+        # 修正：V_equiv_coffee 無論 sat 為何，始終計入熱動方程分母。
+        V_eff_T = V_liq_t + params.V_equiv_coffee
         dT = (Q_in / V_eff_T) * (params.T_brew - T) \
              - params.lambda_cool * (T - params.T_amb)
 
