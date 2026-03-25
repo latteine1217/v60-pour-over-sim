@@ -83,7 +83,7 @@ def simulate_brew(
         dis_slow = params.k_ext_slow_T(T) * max(0.0, C_eff_slow - C_slow)
 
         # 粉床孔隙 CSTR 濃度更新（修正 [5][7][11] 組合）
-        # dC/dt = (dis - Q_ext × C) / V_liq
+        # dC/dt = (dis - Q_ext × C) / V_liquid
         # 物理解釋：Q_ext 是「真正穿過粉層」的 Darcy 流速（≈1-3 mL/s），
         #           NOT 注水速率 Q_in（≈7.5 mL/s）。兩者差 4-7 倍，代表大部分注水
         #           先積在自由液面（產生靜水壓），再靠 Darcy 滲透進粉床孔隙。
@@ -92,11 +92,22 @@ def simulate_brew(
         #   下一段注水 → h 升 → Q_ext 增大 → 驅動力(C_eff-C)大 → 更多溶解
         # 此 CSTR 模型忽略粉床縱向濃度梯度（PFR 效應），稍低估多段注水效益；
         # 完整修正需要 PDE 空間模型（未來工作）。
-        V_liq = params.V_liquid
-        dC_fast = (dis_fast - Q_ext * C_fast) / V_liq
+        #
+        # NOTE（動態稀釋體積）：使用靜態 V_liquid（滿載孔隙量）而非瞬時 V_liq_t，
+        # 是刻意的數值穩定性選擇。若使用小分母 V_liq_t（初期 ≈1mL），
+        # 萃取速率未同步按 sat 縮放時，C_fast 在 t<2s 即衝至 220 g/L，
+        # 導致 M_fast 快速耗盡（EY>28%）。正確修正需同步縮放 dis_fast × sat，
+        # 等效為「未飽和粉床的可萃取固態溶質比例也等比縮小」，
+        # 在 0D 集總模型中引入高非線性耦合。留作未來 PDE 擴展時一併修正。
+        V_liq_conc = params.V_liquid
+        dC_fast = (dis_fast - Q_ext * C_fast) / V_liq_conc
         dM_fast = -dis_fast * 1e3
-        dC_slow = (dis_slow - Q_ext * C_slow) / V_liq
+        dC_slow = (dis_slow - Q_ext * C_slow) / V_liq_conc
         dM_slow = -dis_slow * 1e3
+
+        # 瞬時孔隙液體體積（供熱動方程使用）
+        V_liq_t = max(params.phi * (np.pi / 3) * params._tan2 * h**3,
+                      params.V_liquid * 0.05)
 
         # 熱動方程（修正 [6]）—— CSTR 焓平衡推導
         # 完整焓平衡：d(V_eff·T)/dt = Q_in·T_brew - Q_out·T - λ·V_eff·(T-T_amb)
@@ -105,8 +116,6 @@ def simulate_brew(
         # → V_eff·dT/dt = Q_in·T_brew - Q_out·T - T·(Q_in-Q_out) - λ·V_eff·(T-T_amb)
         #               = Q_in·(T_brew-T) - λ·V_eff·(T-T_amb)
         # 結論：dm/dt 項在展開後「自然相消」，現有簡化公式完全等價於完整焓平衡。
-        V_liq_t = max(params.phi * (np.pi / 3) * params._tan2 * h**3,
-                      params.V_liquid * 0.05)
         # 修正 Bug [熱慣性]：咖啡粉固體熱容為常駐項，不隨 sat 消失。
         # 舊版 V_equiv_coffee × (1-sat) 在 sat→1 時錯誤移除粉體熱容，
         # 導致第一注完成瞬間分母縮小，引發虛假溫度跳變並低估後段降溫效果。
