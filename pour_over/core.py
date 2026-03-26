@@ -4,7 +4,7 @@ V60 手沖咖啡 ODE 模擬引擎
 此模組為核心數值積分引擎，實作 V60 8D ODE 系統的求解與結果後處理。
 
 核心狀態向量：
-    state = [h, V_out, V_poured, C_fast, M_fast, C_slow, M_slow, T]
+    state = [h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T]
 
 主要函式：
     simulate_brew()  — 數值積分 ODE，回傳完整時序結果 dict
@@ -25,12 +25,13 @@ def simulate_brew(
     n_eval: int = 3000,
 ) -> dict:
     """
-    數值積分 V60 8D ODE 系統（v7 多組分萃取）。
+    數值積分 V60 9D ODE 系統（v7 多組分萃取 + 動態潤濕）。
 
-    What: 狀態向量 [h, V_out, V_poured, C_fast, M_fast, C_slow, M_slow, T]
+    What: 狀態向量 [h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T]
           h        → 水位 [m]
           V_out    → 累積出液量 [m³]，動態計算 k_eff
           V_poured → 累積注水量 [m³]，計算吸水飽和度 sat
+          sat      → 粉床實際潤濕/吸水飽和度 [-]
           C_fast   → Fast 組分粉層濃度 [g/L]（酸/甜）
           M_fast   → Fast 組分剩餘固相質量 [g]
           C_slow   → Slow 組分粉層濃度 [g/L]（苦/澀）
@@ -40,23 +41,39 @@ def simulate_brew(
     Why:  八維狀態讓流體力學、多組分化學萃取、熱力學三者完全耦合。
     """
     def rhs(t, state):
-        h, V_out, V_poured, C_fast, M_fast, C_slow, M_slow, T = state
+        h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T = state
         h      = max(h, H_MIN)
+        sat    = float(np.clip(sat, 0.0, 1.0))
         C_fast = max(C_fast, 0.0)
         M_fast = max(M_fast, 0.0)
         C_slow = max(C_slow, 0.0)
         M_slow = max(M_slow, 0.0)
         T      = float(np.clip(T, params.T_amb, params.T_brew + 5.0))
 
-        sat     = params.saturation(V_poured)   # 必須先算 sat，k_eff 需要它
-        k_val   = params.k_eff(V_out, sat)      # [修正 8] 溶脹修正需要 sat
+        sat_target = params.saturation(V_poured)
+        k_val   = params.k_eff(V_out, sat, h)   # [修正 8] 溶脹修正需要 sat；壓差壓實需要 h
         psi_val = params.psi_eff(V_out)
 
         Q_in  = protocol.pour_rate(t)
-        Q_ext = params.q_extract(h, k_val, T, t)   # t 傳入修正 [14] CO₂ 背壓
+        Q_ext = params.q_extract(h, k_val, T, t, sat=sat)   # t 傳入修正 [14] CO₂ 背壓
         Q_bp  = params.q_bypass(h, psi_val, T)
         Q_out = Q_ext + Q_bp
         area  = params.area(h)
+
+        # 修正 [16] 動態潤濕：注水填充 + 毛細潤濕並行
+        # d sat / dt = hydraulic_fill + capillary_fill
+        # hydraulic_fill : 直接由新注入的水推進
+        # capillary_fill : 只在「乾粉浸濕」階段由已滯留液體繼續潤濕粉床
+        # 注意：Lucas-Washburn 僅適用於乾粉前沿潤濕；當 V_poured >= V_full 時，
+        #       模型視為乾粉浸濕階段已結束，後續不再額外啟用毛細浸潤項。
+        sat_gap = max(0.0, sat_target - sat)
+        V_absorb = max(params.V_absorb, 1e-12)
+        dsat_hyd = (Q_in / V_absorb) * sat_gap
+        retained_liquid = max(V_poured - V_out, 0.0)
+        dry_wetting_active = float(V_poured < params._V_full)
+        cap_gate = np.clip(retained_liquid / max(params._V_full, 1e-12), 0.0, 1.0)
+        dsat_cap = dry_wetting_active * cap_gate * sat_gap / params.tau_cap_T(T)
+        dsat = dsat_hyd + dsat_cap
 
         Q_in_free = Q_in * sat
         dh = (Q_in_free - Q_out) / area
@@ -73,14 +90,20 @@ def simulate_brew(
             C_eff_fast = params.C_sat_fast_T(T) * acc_fast
         else:
             C_eff_fast = 0.0
-        dis_fast = params.k_ext_fast_T(T) * max(0.0, C_eff_fast - C_fast)
+        # 修正 [15] 流速依賴傳質係數（邊界層 Sh 效應）
+        # flow_factor = k_diff_ratio + (1-k_diff_ratio) × Q_ext/(Q_ext+Q_half)
+        # 靜置(Q→0): flow_factor→k_diff_ratio；流動(Q>>Q_half): flow_factor→1
+        _kr = params.k_diff_ratio
+        flow_factor = _kr + (1.0 - _kr) * Q_ext / (Q_ext + params.Q_half)
+
+        dis_fast = params.k_ext_fast_T(T, t) * flow_factor * max(0.0, C_eff_fast - C_fast)
 
         if params.M_slow_0 > 0 and M_slow > 0:
             acc_slow = (M_slow / params.M_slow_0) ** β
             C_eff_slow = params.C_sat_slow_T(T) * acc_slow
         else:
             C_eff_slow = 0.0
-        dis_slow = params.k_ext_slow_T(T) * max(0.0, C_eff_slow - C_slow)
+        dis_slow = params.k_ext_slow_T(T, t) * flow_factor * max(0.0, C_eff_slow - C_slow)
 
         # 粉床孔隙 CSTR 濃度更新（修正 [5][7][11] 組合）
         # dC/dt = (dis - Q_ext × C) / V_liquid
@@ -124,7 +147,7 @@ def simulate_brew(
         dT = (Q_in / V_eff_T) * (params.T_brew - T) \
              - params.lambda_cool * (T - params.T_amb)
 
-        return [dh, Q_out, Q_in, dC_fast, dM_fast, dC_slow, dM_slow, dT]
+        return [dh, Q_out, Q_in, dsat, dC_fast, dM_fast, dC_slow, dM_slow, dT]
 
     t_eval = np.linspace(0, t_end, n_eval)
     # 初始熱衝擊溫度
@@ -138,7 +161,7 @@ def simulate_brew(
     sol = solve_ivp(
         rhs,
         t_span=(0, t_end),
-        y0=[H_MIN, 0.0, 0.0, 0.0, params.M_fast_0, 0.0, params.M_slow_0, T_shock],
+        y0=[H_MIN, 0.0, 0.0, 0.0, 0.0, params.M_fast_0, 0.0, params.M_slow_0, T_shock],
         t_eval=t_eval,
         # RK45 + 加密步長（max_step=0.5）
         # 選用 RK45 而非 LSODA/Radau 的理由：
@@ -155,23 +178,27 @@ def simulate_brew(
     h        = np.maximum(sol.y[0], 0.0)
     V_out    = sol.y[1]
     V_poured = sol.y[2]
-    C_fast   = np.maximum(sol.y[3], 0.0)   # [g/L] Fast 組分粉層濃度
-    M_fast   = np.maximum(sol.y[4], 0.0)   # [g]   Fast 組分剩餘固相
-    C_slow   = np.maximum(sol.y[5], 0.0)   # [g/L] Slow 組分粉層濃度
-    M_slow   = np.maximum(sol.y[6], 0.0)   # [g]   Slow 組分剩餘固相
-    T_K      = np.clip(sol.y[7], params.T_amb, params.T_brew + 5.0)  # [K]
+    sat      = np.clip(sol.y[3], 0.0, 1.0)
+    C_fast   = np.maximum(sol.y[4], 0.0)   # [g/L] Fast 組分粉層濃度
+    M_fast   = np.maximum(sol.y[5], 0.0)   # [g]   Fast 組分剩餘固相
+    C_slow   = np.maximum(sol.y[6], 0.0)   # [g/L] Slow 組分粉層濃度
+    M_slow   = np.maximum(sol.y[7], 0.0)   # [g]   Slow 組分剩餘固相
+    T_K      = np.clip(sol.y[8], params.T_amb, params.T_brew + 5.0)  # [K]
     M_sol    = M_fast + M_slow             # 向後相容：總剩餘固相
 
-    sat      = np.vectorize(params.saturation)(V_poured)
     q_in_raw = np.array([protocol.pour_rate(ti) for ti in t])
     q_in_eff = q_in_raw * sat
 
     # 重新計算各流量分量（用於繪圖，帶入衰減後的 k、Ψ 與溫度）
-    k_vals   = params.k_eff(V_out, sat)   # [修正 8] 後處理時同步加入溶脹修正
+    k_vals   = np.array([params.k_eff(v, s, hi) for v, s, hi in zip(V_out, sat, h)])
     psi_vals = params.psi_eff(V_out)
-    q_ext  = params.q_extract(h, k_vals, T_K)
+    q_ext  = params.q_extract(h, k_vals, T_K, sat=sat)
     q_bp   = params.q_bypass(h, psi_vals, T_K)
     q_out  = q_ext + q_bp
+    area_arr = np.maximum(params.area(h), 1e-12)
+    phi_eff_arr = np.array([params.phi_effective(s, hi) for s, hi in zip(sat, h)])
+    u_pore = np.where(q_ext > 1e-12, q_ext / np.maximum(area_arr * phi_eff_arr, 1e-12), 0.0)
+    fine_drag = np.abs(u_pore) * np.array([params.mu_water(Ti) for Ti in T_K]) * params.fine_radius()
 
     dt           = np.diff(t, prepend=t[0])
     v_in_ml      = np.cumsum(dt * q_in_raw) * 1e6
@@ -219,11 +246,20 @@ def simulate_brew(
     EY_dissolved_pct = M_dissolved_g * _ey_scale
     EY_pct           = EY_cup_pct
 
-    # 最終沖煮時間（最後一注結束後，h 降至毛細管門檻 + 1mm 的時刻）
-    # h_cap > 0 時：水位不會低於 h_cap，門檻調整為 h_cap + 1mm
-    # h_cap = 0 時：使用舊版 2mm 門檻（向後相容）
+    # 沖煮時間（最後一注結束後，水柱高度 = 粉層高度 的時刻）
+    # 在現有集總幾何中，h 直接代表相對濾杯出口的液柱高度；
+    # 因此以 h <= h_bed 作為可操作的工程定義。
+    # 保留原有 drain_time 作為「滴濾幾乎結束」的次要診斷量，避免破壞既有分析。
     t_last_pour = protocol.last_pour_end()
     mask_after  = t > t_last_pour
+    brew_time   = t_end
+    brew_threshold = params.h_bed
+    if mask_after.any():
+        reach_brew_time = np.where(mask_after & (h <= brew_threshold))[0]
+        if reach_brew_time.size:
+            brew_time = t[reach_brew_time[0]]
+
+    # 最終滴濾結束時間（舊定義）
     drain_threshold = max(0.002, params.h_cap + 0.001)  # [m]
     drain_time  = t_end
     if mask_after.any():
@@ -234,6 +270,14 @@ def simulate_brew(
     return dict(
         t            = t,
         h_mm         = h * 1e3,
+        dose_g       = params.dose_g,          # 粉重（供 LRR 驗算）
+        f_abs        = params.absorb_full_ratio,  # 充分浸潤吸水率 [mL/g]
+        D10_um       = params.D10 * 1e6,
+        shell_ratio  = params.shell_accessibility_ratio,
+        area_ratio   = params.surface_area_ratio,
+        phi_eff      = phi_eff_arr,
+        u_pore_mps   = u_pore,
+        fine_drag_N  = fine_drag,
         q_in_mlps    = q_in_raw * 1e6,
         q_in_eff_mlps= q_in_eff * 1e6,
         q_ext_mlps   = q_ext    * 1e6,
@@ -247,6 +291,7 @@ def simulate_brew(
         v_extract_ml = v_extract_ml,
         bypass_ratio = bypass_ratio,
         sat          = sat,
+        brew_time    = brew_time,
         drain_time   = drain_time,
         # TDS + 固相耗盡（v7 多組分）
         C_bed_gl         = C_bed,
@@ -286,7 +331,9 @@ def print_summary(results: dict, label: str = "") -> None:
     print("=" * 54)
     print(f"  V60 手沖模擬摘要{tag}")
     print("=" * 54)
-    print(f"  沖煮完成時間   : {results['drain_time']:.1f} s")
+    brew_time = results.get("brew_time", results["drain_time"])
+    print(f"  沖煮時間       : {brew_time:.1f} s  (自由水柱 = 粉層高)")
+    print(f"  滴濾結束時間   : {results['drain_time']:.1f} s")
     print(f"  總注水量       : {results['v_in_ml'][-1]:.1f} mL")
     print(f"  有效水量（扣吸）: {results['v_in_eff_ml'][-1]:.1f} mL")
     print(f"  總出液量       : {v_out:.1f} mL")
@@ -298,12 +345,33 @@ def print_summary(results: dict, label: str = "") -> None:
     k0  = results["k_vals"][0]
     k_f = results["k_vals"][-1]
     print(f"  k 衰減比       : {k_f/k0:.2f}  ({k0:.2e} → {k_f:.2e} m²)")
+    if "D10_um" in results:
+        print(f"  D10 / 殼層比   : {results['D10_um']:.0f} μm  /  {results['shell_ratio']:.2f}×")
+    if "u_pore_mps" in results:
+        print(f"  峰值孔隙流速   : {results['u_pore_mps'].max():.4f} m/s")
+    if "fine_drag_N" in results:
+        print(f"  峰值細粉拖曳力 : {results['fine_drag_N'].max():.2e} N")
     print(f"  最終 TDS       : {results['TDS_gl'][-1]:.2f} g/L  ({results['TDS_gl'][-1]/10:.2f}%)")
     print(f"  EY（入壺）     : {results['EY_cup_pct'][-1]:.1f}%")
     print(f"  EY（已溶出）   : {results['EY_dissolved_pct'][-1]:.1f}%")
     print(f"  └ 差值（留杯） : {results['EY_dissolved_pct'][-1]-results['EY_cup_pct'][-1]:.1f}%")
     print(f"  粉層峰值濃度   : {results['C_bed_gl'].max():.1f} g/L")
     print(f"  固相剩餘溶質   : {results['M_sol_g'][-1]:.2f} g / {results['M_sol_g'][0]:.2f} g")
+    # ── Gagné LRR 質量守恆驗算 ───────────────────────────────────────────────
+    # LRR = (W - B(1-C)) / D；其中 W=注水量, B=出壺量, C=TDS分率, D=粉重
+    # 物理意義：每克咖啡粉保留了多少 mL 水（吸水 + 殘留粉層）
+    # V60 典型值 ~2.2 mL/g（Gagné）；偏低代表排得較乾淨
+    if "dose_g" in results:
+        W   = float(results["v_in_ml"][-1])
+        B   = float(results["v_out_ml"][-1])
+        C   = float(results["TDS_gl"][-1]) / 1000.0   # g/L → 無量綱分率
+        D   = results["dose_g"]
+        f_a = results["f_abs"]
+        lrr = (W - B * (1.0 - C)) / D
+        ey_lrr = (C / (1.0 - C)) * (W / D - f_a)
+        print(f"  ── Gagné 質量守恆驗算 ────────────────────────")
+        print(f"    LRR（留水率）   : {lrr:.2f} mL/g  （V60 典型 ~2.2）")
+        print(f"    EY（LRR 公式）  : {ey_lrr*100:.1f}%  （vs 模型 EY {results['EY_cup_pct'][-1]:.1f}%）")
     if "EY_fast_cup_pct" in results:
         ey_fast = results["EY_fast_cup_pct"][-1]
         ey_slow = results["EY_slow_cup_pct"][-1]
@@ -313,6 +381,27 @@ def print_summary(results: dict, label: str = "") -> None:
         print(f"    ├ Fast（酸/甜）: EY={ey_fast:.1f}%  TDS={results['TDS_fast_gl'][-1]:.1f} g/L")
         print(f"    └ Slow（苦/澀）: EY={ey_slow:.1f}%  TDS={results['TDS_slow_gl'][-1]:.1f} g/L")
         print(f"    風味平衡 Fast% = {ratio:.0f}%  （越高越明亮/酸，越低越苦）")
+        # ── 風味診斷標籤（CVA 邏輯，優先級：萃取完整性 > 平衡傾向）──────────
+        ey_cup = results["EY_cup_pct"][-1]
+        tds    = results["TDS_gl"][-1]
+        fast_ratio = ratio / 100.0
+        if ey_cup < 17.0:
+            flavor_tag = "Under-extracted ⚠  （萃取不足：甜感與酸質均未發展完全）"
+        elif ey_cup > 23.0:
+            flavor_tag = "Over-extracted  ⚠  （過度萃取：苦澀物質過量釋放）"
+        elif fast_ratio > 0.55:
+            flavor_tag = "Bright & Acidic    （明亮酸質主導：有機酸/糖類充分，苦韻偏弱）"
+        elif fast_ratio < 0.45:
+            flavor_tag = "Heavy & Bitter     （厚重苦韻主導：Slow 組分過度發展）"
+        else:
+            flavor_tag = "Balanced           （均衡發展：Fast/Slow 在 SCA 黃金窗口內）"
+        # 並列顯示 TDS 強度標記
+        if tds < 11.0:
+            flavor_tag += "  [淡薄]"
+        elif tds > 14.5:
+            flavor_tag += "  [濃烈]"
+        print(f"  ── 風味診斷 ──────────────────────────────────")
+        print(f"    {flavor_tag}")
     if "T_C" in results:
         T_start = results["T_C"][0]
         T_end   = results["T_C"][-1]

@@ -2,422 +2,530 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from .params import V60Params, PourProtocol, RoastProfile
-from .core import simulate_brew, print_summary
+from .core import simulate_brew
+
+
+PALETTE = {
+    "bg": "#f6f1e8",
+    "panel": "#fffaf2",
+    "grid": "#ddd4c4",
+    "ink": "#2d241d",
+    "muted": "#6e6256",
+    "blue": "#2f6db2",
+    "teal": "#147d6f",
+    "orange": "#c46a2d",
+    "red": "#a63d40",
+    "purple": "#7d4f9e",
+    "green": "#4f7d43",
+    "gold": "#d1a43b",
+    "lime": "#99b76b",
+}
+
+
+def _setup_style() -> None:
+    """設定輸出圖的整體風格。
+
+    What: 把所有圖改成暖底色、高對比重點線、低干擾網格。
+    Why: 使用者看的是沖煮判讀，不是 Matplotlib 預設主題。
+    """
+    plt.rcParams.update({
+        "figure.facecolor": PALETTE["bg"],
+        "axes.facecolor": PALETTE["panel"],
+        "axes.edgecolor": PALETTE["grid"],
+        "axes.labelcolor": PALETTE["ink"],
+        "axes.titlecolor": PALETTE["ink"],
+        "text.color": PALETTE["ink"],
+        "xtick.color": PALETTE["muted"],
+        "ytick.color": PALETTE["muted"],
+        "font.size": 10.5,
+        "axes.titlesize": 12,
+        "axes.labelsize": 10,
+        "legend.frameon": False,
+        "savefig.facecolor": PALETTE["bg"],
+    })
+
+
+def _style_ax(ax, title: str, ylabel: str, xlabel: str = "Time [s]") -> None:
+    """統一子圖外觀，讓不同圖之間的閱讀習慣一致。"""
+    ax.set_facecolor(PALETTE["panel"])
+    ax.grid(True, color=PALETTE["grid"], linewidth=0.8, alpha=0.9)
+    ax.set_axisbelow(True)
+    ax.set_title(title, loc="left", fontweight="bold", pad=10)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(PALETTE["grid"])
+
+
+def _summary_band(fig, title: str, stats: list[tuple[str, str]]) -> None:
+    """在圖頂部放關鍵數值，讓讀者先抓結論再看曲線。"""
+    fig.text(0.015, 0.985, title, ha="left", va="top",
+             fontsize=18, fontweight="bold", color=PALETTE["ink"])
+    x = 0.985
+    for label, value in reversed(stats):
+        fig.text(
+            x, 0.985, f"{label}\n{value}",
+            ha="right", va="top", fontsize=9.2, color=PALETTE["ink"],
+            bbox=dict(boxstyle="round,pad=0.35", fc=PALETTE["panel"], ec=PALETTE["grid"], lw=0.8),
+        )
+        x -= 0.145
+
+
+def _add_time_guides(ax, results: dict) -> None:
+    """加上 brew end / drain end 的垂直參考線。"""
+    t = results["t"]
+    ymax = ax.get_ylim()[1]
+    brew_time = float(results.get("brew_time", np.nan))
+    drain_time = float(results.get("drain_time", np.nan))
+    if np.isfinite(brew_time) and 0 < brew_time < t[-1]:
+        ax.axvline(brew_time, color=PALETTE["muted"], lw=1.0, ls="--", alpha=0.8)
+        ax.text(brew_time, ymax, " brew end", color=PALETTE["muted"],
+                fontsize=8.2, va="top", ha="left")
+    if np.isfinite(drain_time) and brew_time < drain_time < t[-1]:
+        ax.axvline(drain_time, color=PALETTE["grid"], lw=1.0, ls=":", alpha=1.0)
+        ax.text(drain_time, ymax, " drain end", color=PALETTE["muted"],
+                fontsize=8.2, va="top", ha="left")
+
+
+def _annotate_endpoint(ax, x: float, y: float, text: str, color: str, dx: float = 6, dy: float = 0) -> None:
+    """在曲線終點或重點位置標數值，減少 legend 往返。"""
+    ax.scatter([x], [y], s=28, color=color, edgecolor="white", linewidth=0.8, zorder=5)
+    ax.annotate(
+        text, (x, y), xytext=(dx, dy), textcoords="offset points",
+        fontsize=8.3, color=color, va="center",
+        bbox=dict(boxstyle="round,pad=0.22", fc=PALETTE["panel"], ec=color, lw=0.8),
+    )
+
+
+def _save_fig(fig, save_as: str, message: str) -> None:
+    """統一輸出圖檔與關閉 figure，避免互動式殘留狀態。"""
+    fig.savefig(save_as, dpi=180, bbox_inches="tight")
+    plt.close(fig)
+    print(message)
 
 
 def plot_results(
     results: dict,
-    title: str = "V60 手沖模擬",
+    title: str = "V60 Flow Diagnostics",
     save_as: str = "v60_simulation.png",
 ) -> None:
-    """六格診斷圖：水位 / 流量 / 累積體積 / 旁路比 / k 衰減 / 飽和度"""
+    """六格流體診斷圖。
+
+    What: 呈現水位、流量分解、體積守恆、旁路、滲透率與飽和度。
+    Why:  先把流動讀清楚，才能討論後面的萃取品質是不是合理。
+    """
+    _setup_style()
     t = results["t"]
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
-    fig.suptitle(title, fontsize=13, fontweight="bold")
+    fig, axes = plt.subplots(2, 3, figsize=(15.6, 8.8), constrained_layout=True)
+    _summary_band(fig, title, [
+        ("Brew time", f"{results['brew_time']:.0f} s"),
+        ("Drain time", f"{results['drain_time']:.0f} s"),
+        ("Avg bypass", f"{results['bypass_ratio'].mean() * 100:.1f}%"),
+        ("D10", f"{results['D10_um']:.0f} μm"),
+    ])
 
-    # 1. Water Level
     ax = axes[0, 0]
-    ax.plot(t, results["h_mm"], color="#1565C0", linewidth=2)
-    ax.axhline(results["k_vals"][0] and 48, color="gray", lw=1, ls="--",
-               label=f"h_bed = 48 mm")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Water Level [mm]")
-    ax.set_title("Water Level  h(t)")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    ax.fill_between(t, results["h_mm"], color=PALETTE["blue"], alpha=0.16)
+    ax.plot(t, results["h_mm"], color=PALETTE["blue"], lw=2.4)
+    ax.axhline(48, color=PALETTE["muted"], lw=1.0, ls="--")
+    _style_ax(ax, "Water head over time", "Water Level [mm]")
+    _add_time_guides(ax, results)
+    _annotate_endpoint(ax, t[-1], results["h_mm"][-1], f"{results['h_mm'][-1]:.1f} mm", PALETTE["blue"], dx=-78)
 
-    # 2. Flow Decomposition
     ax = axes[0, 1]
-    ax.stackplot(t, results["q_ext_mlps"], results["q_bp_mlps"],
-                 labels=["Q_extract (Darcy)", "Q_bypass (Rib)"],
-                 colors=["#1E88E5", "#FB8C00"], alpha=0.75)
-    ax.plot(t, results["q_in_eff_mlps"], "g--", lw=1.5, label="Q_in_eff (net pour)")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Flow Rate [mL/s]")
-    ax.set_title("Flow Rate Decomposition")
-    ax.legend(fontsize=8, loc="upper right")
-    ax.grid(alpha=0.3)
+    ax.stackplot(
+        t, results["q_ext_mlps"], results["q_bp_mlps"],
+        labels=["Bed extraction", "Bypass"],
+        colors=[PALETTE["teal"], PALETTE["orange"]], alpha=0.72,
+    )
+    ax.plot(t, results["q_in_eff_mlps"], color=PALETTE["blue"], lw=1.6, ls="--", label="Effective pour")
+    _style_ax(ax, "Where the liquid goes", "Flow Rate [mL/s]")
+    _add_time_guides(ax, results)
+    ax.legend(loc="upper right", fontsize=8.4)
 
-    # 3. Cumulative Volume
     ax = axes[0, 2]
-    ax.plot(t, results["v_in_ml"],      color="#2E7D32", lw=2,   label="Total In (poured)")
-    ax.plot(t, results["v_in_eff_ml"],  color="#81C784", lw=1.5, ls="--", label="Effective In")
-    ax.plot(t, results["v_out_ml"],     color="#C62828", lw=2,   label="Total Out")
-    ax.plot(t, results["v_extract_ml"], color="#1565C0", lw=1.5, ls="--", label="Extract Out")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Volume [mL]")
-    ax.set_title("Cumulative Volume")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    ax.plot(t, results["v_in_ml"], color=PALETTE["green"], lw=2.3, label="Total in")
+    ax.plot(t, results["v_in_eff_ml"], color="#8fbf7f", lw=1.7, ls="--", label="Effective in")
+    ax.plot(t, results["v_out_ml"], color=PALETTE["red"], lw=2.3, label="Total out")
+    ax.plot(t, results["v_extract_ml"], color=PALETTE["blue"], lw=1.7, ls="--", label="Extract out")
+    _style_ax(ax, "Cumulative volume balance", "Volume [mL]")
+    _add_time_guides(ax, results)
+    ax.legend(fontsize=8.2, loc="lower right")
 
-    # 4. Bypass Ratio
     ax = axes[1, 0]
-    bp = results["bypass_ratio"] * 100
-    ax.fill_between(t, bp, alpha=0.35, color="#FB8C00")
-    ax.plot(t, bp, color="#FB8C00", lw=1.5)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Bypass Ratio [%]")
-    ax.set_title("Bypass Fraction  Q_bp / Q_total")
+    bypass_pct = results["bypass_ratio"] * 100
+    ax.fill_between(t, bypass_pct, color=PALETTE["orange"], alpha=0.28)
+    ax.plot(t, bypass_pct, color=PALETTE["orange"], lw=2.2)
+    _style_ax(ax, "Bypass activation", "Bypass Ratio [%]")
     ax.set_ylim(0, 100)
-    ax.grid(alpha=0.3)
+    _add_time_guides(ax, results)
+    _annotate_endpoint(ax, t[-1], bypass_pct[-1], f"{bypass_pct[-1]:.1f}%", PALETTE["orange"], dx=-54)
 
-    # 5. k Decay
     ax = axes[1, 1]
-    ax.plot(t, results["k_vals"] * 1e11, color="#6A1B9A", lw=2)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("k_eff  [×10⁻¹¹ m²]")
-    ax.set_title("Permeability Decay  k(V_out)")
-    ax.grid(alpha=0.3)
-
-    # 6. Saturation (Bloom)
-    ax = axes[1, 2]
-    ax.fill_between(t, results["sat"] * 100, alpha=0.4, color="#00695C")
-    ax.plot(t, results["sat"] * 100, color="#00695C", lw=1.5)
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Saturation [%]")
-    ax.set_title("Bloom Saturation  V_poured / V_absorb")
+    k_retained = results["k_vals"] / results["k_vals"][0] * 100
+    ax.fill_between(t, k_retained, 100, color=PALETTE["purple"], alpha=0.10)
+    ax.plot(t, k_retained, color=PALETTE["purple"], lw=2.2)
+    _style_ax(ax, "Permeability retained", "k_eff / k_0 [%]")
     ax.set_ylim(0, 105)
-    ax.grid(alpha=0.3)
+    _add_time_guides(ax, results)
+    _annotate_endpoint(ax, t[-1], k_retained[-1], f"{k_retained[-1]:.0f}%", PALETTE["purple"], dx=-48)
 
-    plt.tight_layout()
-    plt.savefig(save_as, dpi=150, bbox_inches="tight")
-    print(f"圖表已儲存至 {save_as}")
+    ax = axes[1, 2]
+    sat_pct = results["sat"] * 100
+    ax.fill_between(t, sat_pct, color=PALETTE["teal"], alpha=0.35)
+    ax.plot(t, sat_pct, color=PALETTE["teal"], lw=2.2)
+    _style_ax(ax, "Bed wetting and saturation", "Saturation [%]")
+    ax.set_ylim(0, 105)
+    _add_time_guides(ax, results)
+    reached = np.where(results["sat"] >= 0.995)[0]
+    if reached.size > 0:
+        i = int(reached[0])
+        ax.scatter([t[i]], [sat_pct[i]], s=28, color=PALETTE["teal"], edgecolor="white", linewidth=0.8)
+        ax.annotate("fully wetted", (t[i], sat_pct[i]), xytext=(8, -14), textcoords="offset points",
+                    fontsize=8.3, color=PALETTE["teal"])
+
+    _save_fig(fig, save_as, f"圖表已儲存至 {save_as}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  TDS 診斷圖
-# ─────────────────────────────────────────────────────────────────────────────
 def plot_tds(
     results: dict,
-    title: str = "V60 TDS Analysis",
+    title: str = "V60 Extraction Quality",
     save_as: str = "v60_tds.png",
 ) -> None:
-    """
-    四格 TDS 診斷圖：粉層濃度 / 下壺濃度 / 累積 TDS / 萃取率 EY。
+    """四格萃取品質圖。
 
-    What: 呈現萃取動力學與旁路稀釋對最終杯中品質的影響
-    Why:  流體模型只告訴你「水怎麼流」；TDS 模型才告訴你「咖啡好不好喝」
+    What: 呈現床內濃度、出液濃度、杯中 TDS、以及 EY 分流。
+    Why:  讓讀者先看到杯中結果，再回推是濃度不足、旁路稀釋，還是保留液造成。
     """
+    _setup_style()
     t = results["t"]
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle(title, fontsize=13, fontweight="bold")
+    fig, axes = plt.subplots(2, 2, figsize=(13.5, 8.6), constrained_layout=True)
+    fast_share = results["EY_fast_cup_pct"][-1] / max(results["EY_cup_pct"][-1], 1e-9) * 100
+    _summary_band(fig, title, [
+        ("Cup TDS", f"{results['TDS_gl'][-1] / 10:.2f}%"),
+        ("Cup EY", f"{results['EY_cup_pct'][-1]:.1f}%"),
+        ("Fast share", f"{fast_share:.0f}%"),
+        ("Final LRR", f"{results['f_abs']:.2f} mL/g"),
+    ])
 
-    # 1. 粉層濃度 C_bed(t) 與有效 C_sat(t)
     ax = axes[0, 0]
-    ax.plot(t, results["C_bed_gl"],     color="#6A1B9A", lw=2,   label="C_bed")
-    ax.plot(t, results["C_sat_eff_gl"], color="#AB47BC", lw=1.5, ls="--", label="C_sat_eff = κ·M_sol")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Concentration [g/L]")
-    ax.set_title("Bed Concentration  C_bed(t)  &  C_sat_eff(t)")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    ax.plot(t, results["C_bed_gl"], color=PALETTE["purple"], lw=2.3, label="Bed concentration")
+    ax.plot(t, results["C_sat_eff_gl"], color="#bb8fd2", lw=1.7, ls="--", label="Effective saturation")
+    _style_ax(ax, "Concentration inside the bed", "Concentration [g/L]")
+    _add_time_guides(ax, results)
+    ax.legend(fontsize=8.4, loc="upper right")
 
-    # 2. 下壺瞬時濃度 C_out(t)（旁路稀釋後）
     ax = axes[0, 1]
-    ax.plot(t, results["C_out_gl"], color="#1565C0", lw=2, label="C_out (after bypass dilution)")
-    ax.plot(t, results["C_bed_gl"], color="#9C27B0", lw=1, ls="--", alpha=0.6, label="C_bed (no dilution)")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Concentration [g/L]")
-    ax.set_title("Outflow Concentration  C_out(t)")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    ax.plot(t, results["C_out_gl"], color=PALETTE["blue"], lw=2.4, label="Cup inflow concentration")
+    ax.plot(t, results["C_bed_gl"], color=PALETTE["purple"], lw=1.2, ls="--", alpha=0.55, label="Bed concentration")
+    _style_ax(ax, "What actually leaves the cone", "Concentration [g/L]")
+    _add_time_guides(ax, results)
+    ax.legend(fontsize=8.4, loc="upper right")
+    _annotate_endpoint(ax, t[-1], results["C_out_gl"][-1], f"{results['C_out_gl'][-1]:.1f} g/L", PALETTE["blue"], dx=-80)
 
-    # 3. 累積 TDS + 固相剩餘
     ax = axes[1, 0]
-    ax.plot(t, results["TDS_gl"], color="#E65100", lw=2, label="TDS (g/L)")
-    ax.axhspan(11.5, 14.5, alpha=0.15, color="green", label="SCA Golden Cup (1.15–1.45%)")
+    ax.plot(t, results["TDS_gl"], color=PALETTE["orange"], lw=2.4, label="Cup TDS")
+    ax.axhspan(11.5, 14.5, alpha=0.15, color=PALETTE["lime"], label="SCA band")
     ax2 = ax.twinx()
-    ax2.plot(t, results["M_sol_g"], color="#78909C", lw=1.5, ls=":", label="M_sol remaining [g]")
-    ax2.set_ylabel("M_sol [g]", color="#78909C")
-    ax2.tick_params(axis="y", labelcolor="#78909C")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("TDS [g/L]")
-    ax.set_title("Cumulative TDS  +  Solute Depletion")
+    ax2.plot(t, results["M_sol_g"], color=PALETTE["muted"], lw=1.6, ls=":", label="Remaining solubles")
+    ax2.set_ylabel("Solubles Remaining [g]", color=PALETTE["muted"])
+    ax2.tick_params(axis="y", labelcolor=PALETTE["muted"])
+    _style_ax(ax, "Cup strength and depletion", "TDS [g/L]")
+    _add_time_guides(ax, results)
     lines1, labels1 = ax.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7)
-    ax.grid(alpha=0.3)
+    ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8.0, loc="lower right")
+    _annotate_endpoint(ax, t[-1], results["TDS_gl"][-1], f"{results['TDS_gl'][-1] / 10:.2f}%", PALETTE["orange"], dx=-52)
 
-    # 4. EY 雙重定義（入壺 vs 已溶出）
     ax = axes[1, 1]
-    ax.plot(t, results["EY_cup_pct"],       color="#2E7D32", lw=2,   label="EY_cup (in your cup)")
-    ax.plot(t, results["EY_dissolved_pct"], color="#81C784", lw=1.5, ls="--", label="EY_dissolved (from solid)")
-    ax.fill_between(t, results["EY_cup_pct"], results["EY_dissolved_pct"],
-                    alpha=0.2, color="#81C784", label="retained in filter")
-    ax.axhspan(18, 22, alpha=0.1, color="green", label="SCA target (18–22%)")
-    ax.set_xlabel("Time [s]")
-    ax.set_ylabel("Extraction Yield [%]")
-    ax.set_title("EY: In-Cup  vs  Dissolved-from-Solid")
-    ax.legend(fontsize=7)
-    ax.grid(alpha=0.3)
+    ax.plot(t, results["EY_cup_pct"], color=PALETTE["teal"], lw=2.4, label="In cup")
+    ax.plot(t, results["EY_dissolved_pct"], color="#7fb7ad", lw=1.7, ls="--", label="Dissolved from solid")
+    ax.fill_between(
+        t, results["EY_cup_pct"], results["EY_dissolved_pct"],
+        alpha=0.18, color="#7fb7ad", label="Retained in bed",
+    )
+    ax.axhspan(18, 22, alpha=0.10, color=PALETTE["lime"], label="SCA target")
+    _style_ax(ax, "Extraction yield split", "Extraction Yield [%]")
+    _add_time_guides(ax, results)
+    ax.legend(fontsize=8.0, loc="lower right")
+    _annotate_endpoint(ax, t[-1], results["EY_cup_pct"][-1], f"{results['EY_cup_pct'][-1]:.1f}%", PALETTE["teal"], dx=-50)
 
-    plt.tight_layout()
-    plt.savefig(save_as, dpi=150, bbox_inches="tight")
-    print(f"TDS 圖表已儲存至 {save_as}")
+    _save_fig(fig, save_as, f"TDS 圖表已儲存至 {save_as}")
+
+
+def compare_grind(protocol: PourProtocol | None = None) -> None:
+    """研磨度比較圖。
+
+    What: 左邊看動態曲線，右下角看最終杯子落點。
+    Why:  這比把六張小圖塞滿更容易讀出「哪一個 grind 落在合理區間」。
+    """
+    if protocol is None:
+        protocol = PourProtocol.standard_v60()
+    _setup_style()
+
+    configs = {
+        "Coarse": V60Params(k=2e-10),
+        "Medium": V60Params(k=6e-11),
+        "Fine": V60Params(k=1.5e-11),
+    }
+    colors = [PALETTE["green"], PALETTE["blue"], PALETTE["red"]]
+
+    fig, axes = plt.subplots(2, 2, figsize=(14.4, 8.8), constrained_layout=True)
+    _summary_band(fig, "Grind Size Comparison", [
+        ("Coarse D10", f"{V60Params(k=2e-10).D10 * 1e6:.0f} μm"),
+        ("Medium D10", f"{V60Params(k=6e-11).D10 * 1e6:.0f} μm"),
+        ("Fine D10", f"{V60Params(k=1.5e-11).D10 * 1e6:.0f} μm"),
+    ])
+
+    finals = []
+    for (label, params), color in zip(configs.items(), colors):
+        res = simulate_brew(params, protocol, t_end=300)
+        t = res["t"]
+        axes[0, 0].plot(t, res["h_mm"], color=color, lw=2.3, label=label)
+        axes[0, 1].plot(t, res["q_out_mlps"], color=color, lw=2.3, label=label)
+        axes[1, 0].plot(t, res["TDS_gl"], color=color, lw=2.3, label=label)
+        finals.append((label, color, res["EY_cup_pct"][-1], res["TDS_gl"][-1], res["brew_time"], res["bypass_ratio"].mean() * 100))
+        print(
+            f"{label}: TDS={res['TDS_gl'][-1]:.1f} g/L  "
+            f"EY={res['EY_cup_pct'][-1]:.1f}%  "
+            f"bypass_avg={res['bypass_ratio'].mean()*100:.1f}%"
+        )
+
+    _style_ax(axes[0, 0], "Water head by grind", "Water Level [mm]")
+    _style_ax(axes[0, 1], "Outflow rate by grind", "Flow Rate [mL/s]")
+    _style_ax(axes[1, 0], "Cup TDS trajectory", "TDS [g/L]")
+    axes[1, 0].axhspan(11.5, 14.5, alpha=0.12, color=PALETTE["lime"])
+    for ax in (axes[0, 0], axes[0, 1], axes[1, 0]):
+        ax.legend(fontsize=8.2, loc="best")
+
+    ax = axes[1, 1]
+    _style_ax(ax, "Final cup map", "TDS [g/L]", xlabel="Extraction Yield [%]")
+    ax.axhspan(11.5, 14.5, alpha=0.12, color=PALETTE["lime"])
+    ax.axvspan(18, 22, alpha=0.10, color="#bed5a0")
+    ax.text(21.8, 14.35, "target window", fontsize=8.4, color=PALETTE["green"], ha="right", va="top")
+    for label, color, ey, tds, brew_t, bypass in finals:
+        size = 40 + brew_t * 0.9
+        ax.scatter(ey, tds, s=size, color=color, alpha=0.88, edgecolor="white", linewidth=1.0)
+        ax.annotate(
+            f"{label}\n{brew_t:.0f}s · {bypass:.1f}% bp",
+            (ey, tds), xytext=(7, 5), textcoords="offset points",
+            fontsize=8.2, color=color,
+        )
+
+    _save_fig(fig, "v60_grind.png", "研磨度綜合對比圖已儲存至 v60_grind.png")
 
 
 def compare_tds_grind(protocol: PourProtocol | None = None) -> None:
-    """
-    不同研磨度的 TDS / EY 對比圖。
-
-    Why: 揭示「旁路比高 × 接觸時間短」如何造成細研磨 TDS 悖論
-         —— 粉層濃度高但下壺 TDS 反而可能低於中研磨（旁路稀釋）
-    """
+    """不同研磨度的濃度與萃取對比圖（保留供獨立呼叫）。"""
     if protocol is None:
         protocol = PourProtocol.standard_v60()
+    _setup_style()
 
     configs = {
-        "Coarse (粗研磨)": V60Params(k=2e-10),
-        "Medium (中研磨)": V60Params(k=6e-11),
-        "Fine   (細研磨)": V60Params(k=1.5e-11),
+        "Coarse": V60Params(k=2e-10),
+        "Medium": V60Params(k=6e-11),
+        "Fine": V60Params(k=1.5e-11),
     }
-    colors = ["#4CAF50", "#1E88E5", "#E53935"]
+    colors = [PALETTE["green"], PALETTE["blue"], PALETTE["red"]]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    fig.suptitle("Grind Size — TDS & EY Comparison", fontsize=13, fontweight="bold")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.5), constrained_layout=True)
+    _summary_band(fig, "Grind vs Extraction Curves", [("View", "Concentration / TDS / EY")])
 
     for (label, params), color in zip(configs.items(), colors):
         res = simulate_brew(params, protocol, t_end=300)
-        axes[0].plot(res["t"], res["C_out_gl"],  color=color, lw=2, label=label)
-        axes[1].plot(res["t"], res["TDS_gl"],    color=color, lw=2, label=label)
-        axes[2].plot(res["t"], res["EY_pct"],    color=color, lw=2, label=label)
-        print(f"{label}: TDS={res['TDS_gl'][-1]:.1f} g/L  EY={res['EY_pct'][-1]:.1f}%  bypass_avg={res['bypass_ratio'].mean()*100:.1f}%")
+        axes[0].plot(res["t"], res["C_out_gl"], color=color, lw=2.3, label=label)
+        axes[1].plot(res["t"], res["TDS_gl"], color=color, lw=2.3, label=label)
+        axes[2].plot(res["t"], res["EY_cup_pct"], color=color, lw=2.3, label=label)
 
+    _style_ax(axes[0], "Outflow concentration", "Concentration [g/L]")
+    _style_ax(axes[1], "Cup TDS", "TDS [g/L]")
+    _style_ax(axes[2], "Cup EY", "Extraction Yield [%]")
+    axes[1].axhspan(11.5, 14.5, alpha=0.12, color=PALETTE["lime"])
+    axes[2].axhspan(18, 22, alpha=0.10, color=PALETTE["lime"])
     for ax in axes:
-        ax.axhspan(11.5, 14.5, alpha=0.1, color="green")
-        ax.set_xlabel("Time [s]")
-        ax.grid(alpha=0.3)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=8.2, loc="best")
 
-    axes[0].set_ylabel("C_out [g/L]")
-    axes[0].set_title("Outflow Concentration")
-    axes[1].set_ylabel("TDS [g/L]")
-    axes[1].set_title("Cumulative TDS")
-    axes[2].set_ylabel("EY [%]")
-    axes[2].set_title("Extraction Yield")
-
-    plt.tight_layout()
-    fname = "v60_tds_grind.png"
-    plt.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"TDS 研磨度對比圖已儲存至 {fname}")
+    _save_fig(fig, "v60_tds_grind.png", "TDS 研磨度對比圖已儲存至 v60_tds_grind.png")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  比較：基礎模型 vs 各項修正
-# ─────────────────────────────────────────────────────────────────────────────
 def compare_corrections(protocol: PourProtocol | None = None) -> None:
-    """
-    四種模型設定的水位曲線對比。
-
-    Why: 讓使用者直觀看到每項物理修正對動態曲線的影響量級
-         確認哪些修正是一階效應、哪些是細節調整
-    """
+    """基礎修正影響量級圖。"""
     if protocol is None:
         protocol = PourProtocol.standard_v60()
+    _setup_style()
 
     base = dict(k=2e-11, mu=3e-4, psi=2e-6)
     scenarios = {
-        "Baseline (v1)":             V60Params(**base, h_bed=1.0,   k_beta=0,   dose_g=0),
-        "+ h_bed correction":        V60Params(**base, h_bed=0.048, k_beta=0,   dose_g=0),
-        "+ fines migration k(V)":    V60Params(**base, h_bed=0.048, k_beta=3e3, dose_g=0),
-        "+ bloom absorption (full)": V60Params(**base, h_bed=0.048, k_beta=3e3, dose_g=20),
+        "Baseline": V60Params(**base, h_bed=1.0, k_beta=0, dose_g=0),
+        "+ bed height": V60Params(**base, h_bed=0.048, k_beta=0, dose_g=0),
+        "+ clogging": V60Params(**base, h_bed=0.048, k_beta=3e3, dose_g=0),
+        "+ absorption": V60Params(**base, h_bed=0.048, k_beta=3e3, dose_g=20),
     }
-    colors = ["#9E9E9E", "#1E88E5", "#E53935", "#2E7D32"]
+    colors = ["#9e9487", PALETTE["blue"], PALETTE["red"], PALETTE["green"]]
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle("Physical Correction Impact — V60 Model v1 → v2", fontsize=13, fontweight="bold")
+    fig, axes = plt.subplots(1, 2, figsize=(13.2, 5.4), constrained_layout=True)
+    _summary_band(fig, "Correction Impact", [("Purpose", "order of magnitude check")])
 
     for (label, params), color in zip(scenarios.items(), colors):
         res = simulate_brew(params, protocol, t_end=300)
-        axes[0].plot(res["t"], res["h_mm"],       color=color, lw=2,   label=label)
-        axes[1].plot(res["t"], res["q_out_mlps"], color=color, lw=2,   label=label)
+        axes[0].plot(res["t"], res["h_mm"], color=color, lw=2.2, label=label)
+        axes[1].plot(res["t"], res["q_out_mlps"], color=color, lw=2.2, label=label)
 
-    for ax, ylabel, subtitle in zip(axes,
-        ["Water Level [mm]", "Outflow Rate [mL/s]"],
-        ["Water Level  h(t)", "Total Outflow  Q(t)"],
-    ):
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel(ylabel)
-        ax.set_title(subtitle)
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.3)
+    _style_ax(axes[0], "Water level response", "Water Level [mm]")
+    _style_ax(axes[1], "Outflow response", "Flow Rate [mL/s]")
+    for ax in axes:
+        ax.legend(fontsize=8.0, loc="best")
 
-    plt.tight_layout()
-    fname = "v60_corrections.png"
-    plt.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"修正對比圖已儲存至 {fname}")
+    _save_fig(fig, "v60_corrections.png", "修正對比圖已儲存至 v60_corrections.png")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  研磨度比較
-# ─────────────────────────────────────────────────────────────────────────────
 def compare_grind_sizes(protocol: PourProtocol | None = None) -> None:
-    """三種研磨度的水位與流速對比（使用完整 v2 模型）。"""
+    """三種研磨度的水位、流量、旁路對比。"""
     if protocol is None:
         protocol = PourProtocol.standard_v60()
+    _setup_style()
 
     configs = {
-        "Coarse (粗研磨)": V60Params(k=2e-10),
-        "Medium (中研磨)": V60Params(k=6e-11),
-        "Fine   (細研磨)": V60Params(k=1.5e-11),
+        "Coarse": V60Params(k=2e-10),
+        "Medium": V60Params(k=6e-11),
+        "Fine": V60Params(k=1.5e-11),
     }
-    colors = ["#4CAF50", "#1E88E5", "#E53935"]
+    colors = [PALETTE["green"], PALETTE["blue"], PALETTE["red"]]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    fig.suptitle("Grind Size Comparison — V60 Simulation v2", fontsize=13, fontweight="bold")
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.4), constrained_layout=True)
+    _summary_band(fig, "Grind Flow Comparison", [("Focus", "head / flow / bypass")])
 
     for (label, params), color in zip(configs.items(), colors):
         res = simulate_brew(params, protocol, t_end=300)
-        axes[0].plot(res["t"], res["h_mm"],       color=color, lw=2, label=label)
-        axes[1].plot(res["t"], res["q_out_mlps"], color=color, lw=2, label=label)
-        axes[2].plot(res["t"], res["bypass_ratio"] * 100, color=color, lw=2, label=label)
+        axes[0].plot(res["t"], res["h_mm"], color=color, lw=2.2, label=label)
+        axes[1].plot(res["t"], res["q_out_mlps"], color=color, lw=2.2, label=label)
+        axes[2].plot(res["t"], res["bypass_ratio"] * 100, color=color, lw=2.2, label=label)
 
-    titles = ["Water Level h(t)", "Outflow Rate Q(t)", "Bypass Ratio"]
-    ylabels = ["Water Level [mm]", "Flow Rate [mL/s]", "Bypass [%]"]
-    for ax, title, ylabel in zip(axes, titles, ylabels):
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.3)
+    _style_ax(axes[0], "Water head", "Water Level [mm]")
+    _style_ax(axes[1], "Outflow", "Flow Rate [mL/s]")
+    _style_ax(axes[2], "Bypass ratio", "Bypass [%]")
+    for ax in axes:
+        ax.legend(fontsize=8.0, loc="best")
 
-    plt.tight_layout()
-    fname = "v60_grind_comparison.png"
-    plt.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"研磨度比較圖已儲存至 {fname}")
+    _save_fig(fig, "v60_grind_comparison.png", "研磨度比較圖已儲存至 v60_grind_comparison.png")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  熱力學耦合對比（修正 [6]）
-# ─────────────────────────────────────────────────────────────────────────────
 def compare_thermal(protocol: PourProtocol | None = None) -> None:
-    """
-    比較三種初始水溫（83 / 93 / 99°C）對沖煮結果的影響。
+    """不同初始水溫的熱耦合對比。
 
-    What: 固定所有其他參數，僅改變 T_brew，觀察溫度對流速、TDS、EY 的影響。
-
-    Why:  μ(T) 影響流速（低溫→黏度大→流慢）；
-          k_ext(T) 影響萃取（低溫→擴散弱→萃取不足）；
-          兩者都透過 T 狀態變數即時耦合。
+    What: 用四張圖看溫度衰減、流量、TDS、EY。
+    Why:  使用者通常想知道「變熱之後，流動變多少、杯子變多少」。
     """
     if protocol is None:
         protocol = PourProtocol.standard_v60()
+    _setup_style()
 
     configs = {
-        "83°C  (cool)":  V60Params(T_brew=356.15),
-        "93°C  (standard)": V60Params(T_brew=366.15),
-        "99°C  (hot)":   V60Params(T_brew=372.15),
+        "83°C": V60Params(T_brew=356.15),
+        "93°C": V60Params(T_brew=366.15),
+        "99°C": V60Params(T_brew=372.15),
     }
-    colors = ["#1E88E5", "#E53935", "#F9A825"]
+    colors = [PALETTE["blue"], PALETTE["red"], PALETTE["gold"]]
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
-    fig.suptitle("Thermal Coupling — Brew Temperature Effect (v5)", fontsize=13, fontweight="bold")
+    fig, axes = plt.subplots(2, 2, figsize=(14.4, 8.8), constrained_layout=True)
+    _summary_band(fig, "Thermal Coupling Comparison", [
+        ("Cool", "83°C"),
+        ("Baseline", "93°C"),
+        ("Hot", "99°C"),
+    ])
 
-    results_all = {}
-    for label, params in configs.items():
+    all_results = []
+    for (label, params), color in zip(configs.items(), colors):
         res = simulate_brew(params, protocol, t_end=300)
-        results_all[label] = res
-        ey_f  = res["EY_fast_cup_pct"][-1]
-        ey_s  = res["EY_slow_cup_pct"][-1]
-        ratio = ey_f / (ey_f + ey_s) * 100 if (ey_f + ey_s) > 0 else 50
-        print(f"  {label}: TDS={res['TDS_gl'][-1]:.1f} g/L  "
-              f"EY={res['EY_cup_pct'][-1]:.1f}%  "
-              f"Fast={ratio:.0f}%  "
-              f"T_drop={res['T_C'][0]-res['T_C'][-1]:.1f}°C")
+        all_results.append((label, color, res))
+        fast = res["EY_fast_cup_pct"][-1]
+        slow = res["EY_slow_cup_pct"][-1]
+        ratio = fast / max(fast + slow, 1e-9) * 100
+        print(
+            f"{label}: TDS={res['TDS_gl'][-1]:.1f} g/L  "
+            f"EY={res['EY_cup_pct'][-1]:.1f}%  "
+            f"Fast={ratio:.0f}%  "
+            f"T_drop={res['T_C'][0] - res['T_C'][-1]:.1f}°C"
+        )
 
-    for (label, res), color in zip(results_all.items(), colors):
+    for label, color, res in all_results:
         t = res["t"]
-        axes[0, 0].plot(t, res["h_mm"],            color=color, lw=2, label=label)
-        axes[0, 1].plot(t, res["q_out_mlps"],      color=color, lw=2, label=label)
-        axes[0, 2].plot(t, res["T_C"],             color=color, lw=2, label=label)
-        axes[1, 0].plot(t, res["TDS_gl"],          color=color, lw=2, label=label)
-        axes[1, 1].plot(t, res["EY_cup_pct"],      color=color, lw=2, label=label)
-        axes[1, 2].plot(t, res["bypass_ratio"]*100, color=color, lw=2, label=label)
+        axes[0, 0].plot(t, res["T_C"], color=color, lw=2.3, label=label)
+        axes[0, 1].plot(t, res["q_out_mlps"], color=color, lw=2.3, label=label)
+        axes[1, 0].plot(t, res["TDS_gl"], color=color, lw=2.3, label=label)
+        axes[1, 1].plot(t, res["EY_cup_pct"], color=color, lw=2.3, label=label)
 
-    titles  = ["Water Level h(t)", "Outflow Rate Q(t)", "Brew Temperature T(t)",
-               "TDS [g/L]",        "EY Cup [%]",        "Bypass Ratio [%]"]
-    ylabels = ["Level [mm]", "Q [mL/s]", "T [°C]",
-               "TDS [g/L]",  "EY [%]",  "Bypass [%]"]
-    for ax, title, ylabel in zip(axes.flat, titles, ylabels):
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.3)
+    _style_ax(axes[0, 0], "Temperature decay in the slurry", "Temperature [°C]")
+    _style_ax(axes[0, 1], "Outflow response to temperature", "Flow Rate [mL/s]")
+    _style_ax(axes[1, 0], "Cup strength by brew temperature", "TDS [g/L]")
+    axes[1, 0].axhspan(11.5, 14.5, alpha=0.12, color=PALETTE["lime"])
+    _style_ax(axes[1, 1], "Cup yield by brew temperature", "Extraction Yield [%]")
+    axes[1, 1].axhspan(18, 22, alpha=0.10, color=PALETTE["lime"])
 
-    plt.tight_layout()
-    fname = "v60_thermal.png"
-    plt.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"熱力學對比圖已儲存至 {fname}")
+    for ax in axes.flat:
+        ax.legend(fontsize=8.2, loc="best")
+
+    for _, color, res in all_results:
+        _annotate_endpoint(axes[1, 0], res["t"][-1], res["TDS_gl"][-1], f"{res['TDS_gl'][-1] / 10:.2f}%", color, dx=-54)
+        _annotate_endpoint(axes[1, 1], res["t"][-1], res["EY_cup_pct"][-1], f"{res['EY_cup_pct'][-1]:.1f}%", color, dx=-50)
+
+    _save_fig(fig, "v60_thermal.png", "熱力學對比圖已儲存至 v60_thermal.png")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  風味組分對比（修正 [7]）
-# ─────────────────────────────────────────────────────────────────────────────
 def compare_flavor(protocol: PourProtocol | None = None) -> None:
-    """
-    三種水溫下的 Fast/Slow 組分萃取對比。
-
-    What: 固定所有物理參數，僅改變 T_brew，觀察溫度如何重新分配 Fast/Slow 比例。
-
-    Why:  Ea_slow >> Ea_fast → 溫度升高使 Slow 速率比 Fast 增長更快（指數差異）；
-          這解釋了「高溫萃出更多苦味」的物理根源。
-          Fast% = EY_fast/(EY_fast+EY_slow) 可作為「明亮度指標」。
-    """
+    """Fast/Slow 組分的溫度對比圖。"""
     if protocol is None:
         protocol = PourProtocol.standard_v60()
+    _setup_style()
 
     configs = {
-        "83°C  (cool)":    V60Params(T_brew=356.15),
-        "93°C  (standard)": V60Params(T_brew=366.15),
-        "99°C  (hot)":     V60Params(T_brew=372.15),
+        "83°C": V60Params(T_brew=356.15),
+        "93°C": V60Params(T_brew=366.15),
+        "99°C": V60Params(T_brew=372.15),
     }
-    colors = ["#1E88E5", "#E53935", "#F9A825"]
+    colors = [PALETTE["blue"], PALETTE["red"], PALETTE["gold"]]
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
-    fig.suptitle("Multi-Component Extraction — Flavor Balance vs Temperature (v7)",
-                 fontsize=12, fontweight="bold")
+    fig, axes = plt.subplots(2, 3, figsize=(15, 9), constrained_layout=True)
+    _summary_band(fig, "Flavor Balance vs Temperature", [("View", "fast vs slow components")])
 
     print("  溫度       | TDS    | EY     | Fast%  | TDS_fast | TDS_slow")
-    print("  " + "-"*65)
+    print("  " + "-" * 65)
     for (label, params), color in zip(configs.items(), colors):
         res = simulate_brew(params, protocol, t_end=300)
-        t   = res["t"]
-        ey_f  = res["EY_fast_cup_pct"][-1]
-        ey_s  = res["EY_slow_cup_pct"][-1]
-        ratio = ey_f / (ey_f + ey_s) * 100 if (ey_f + ey_s) > 0 else 50
-        print(f"  {label}: TDS={res['TDS_gl'][-1]:.1f}  "
-              f"EY={res['EY_cup_pct'][-1]:.1f}%  "
-              f"Fast={ratio:.0f}%  "
-              f"fast_TDS={res['TDS_fast_gl'][-1]:.1f}  "
-              f"slow_TDS={res['TDS_slow_gl'][-1]:.1f}")
+        t = res["t"]
+        ey_f = res["EY_fast_cup_pct"][-1]
+        ey_s = res["EY_slow_cup_pct"][-1]
+        ratio = ey_f / max(ey_f + ey_s, 1e-9) * 100
+        print(
+            f"  {label}: TDS={res['TDS_gl'][-1]:.1f}  "
+            f"EY={res['EY_cup_pct'][-1]:.1f}%  "
+            f"Fast={ratio:.0f}%  "
+            f"fast_TDS={res['TDS_fast_gl'][-1]:.1f}  "
+            f"slow_TDS={res['TDS_slow_gl'][-1]:.1f}"
+        )
 
-        axes[0, 0].plot(t, res["EY_fast_cup_pct"],  color=color, lw=2,     label=label)
-        axes[0, 1].plot(t, res["EY_slow_cup_pct"],  color=color, lw=2,     label=label)
-        axes[0, 2].plot(t, res["TDS_fast_gl"],      color=color, lw=2,     label=label)
+        axes[0, 0].plot(t, res["EY_fast_cup_pct"], color=color, lw=2.2, label=label)
+        axes[0, 1].plot(t, res["EY_slow_cup_pct"], color=color, lw=2.2, label=label)
+        axes[0, 2].plot(t, res["TDS_fast_gl"], color=color, lw=2.2, label=label)
 
-        # 風味平衡比例
-        total_ey = res["EY_fast_cup_pct"] + res["EY_slow_cup_pct"]
-        _total_safe = np.where(total_ey > 0.1, total_ey, 1.0)
-        fast_pct = np.where(total_ey > 0.1, res["EY_fast_cup_pct"] / _total_safe * 100, 50.0)
-        axes[1, 0].plot(t, fast_pct,                color=color, lw=2,     label=label)
-        axes[1, 1].plot(t, res["TDS_slow_gl"],      color=color, lw=2,     label=label)
-        axes[1, 2].plot(t, res["TDS_gl"],           color=color, lw=2,     label=label)
+        total = res["EY_fast_cup_pct"] + res["EY_slow_cup_pct"]
+        total_safe = np.where(total > 0.1, total, 1.0)
+        fast_pct = np.where(total > 0.1, res["EY_fast_cup_pct"] / total_safe * 100, 50.0)
+        axes[1, 0].plot(t, fast_pct, color=color, lw=2.2, label=label)
+        axes[1, 1].plot(t, res["TDS_slow_gl"], color=color, lw=2.2, label=label)
+        axes[1, 2].plot(t, res["TDS_gl"], color=color, lw=2.2, label=label)
 
-    titles  = ["Fast EY (Bright/Acid)",  "Slow EY (Bitter/Astringent)",
-               "Fast TDS [g/L]",
-               "Flavor Balance Fast% (→明亮)", "Slow TDS [g/L]",   "Total TDS [g/L]"]
-    ylabels = ["EY [%]", "EY [%]", "TDS [g/L]", "Fast% [%]", "TDS [g/L]", "TDS [g/L]"]
+    titles = [
+        "Fast EY (bright / acid)", "Slow EY (bitter / astringent)", "Fast TDS",
+        "Fast share in cup", "Slow TDS", "Total TDS",
+    ]
+    ylabels = ["EY [%]", "EY [%]", "TDS [g/L]", "Fast Share [%]", "TDS [g/L]", "TDS [g/L]"]
     for ax, title, ylabel in zip(axes.flat, titles, ylabels):
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.legend(fontsize=8)
-        ax.grid(alpha=0.3)
+        _style_ax(ax, title, ylabel)
+        ax.legend(fontsize=8.0, loc="best")
 
-    plt.tight_layout()
-    fname = "v60_flavor.png"
-    plt.savefig(fname, dpi=150, bbox_inches="tight")
-    print(f"風味組分對比圖已儲存至 {fname}")
+    _save_fig(fig, "v60_flavor.png", "風味組分對比圖已儲存至 v60_flavor.png")

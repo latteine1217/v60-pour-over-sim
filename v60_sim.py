@@ -18,6 +18,7 @@ from pour_over import (                          # noqa: F401
     RoastProfile, V60Params, PourProtocol,
     simulate_brew, print_summary,
     plot_results, plot_tds,
+    compare_grind,
     compare_tds_grind, compare_corrections,
     compare_grind_sizes, compare_thermal, compare_flavor,
     fit_brew_params, demo_fitting,

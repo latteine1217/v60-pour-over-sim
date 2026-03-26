@@ -17,6 +17,7 @@ from .core import simulate_brew, print_summary
 from .viz import (
     plot_results,
     plot_tds,
+    compare_grind,
     compare_tds_grind,
     compare_corrections,
     compare_grind_sizes,
@@ -35,6 +36,7 @@ __all__ = [
     "simulate_brew", "print_summary",
     # 視覺化
     "plot_results", "plot_tds",
+    "compare_grind",
     "compare_tds_grind", "compare_corrections",
     "compare_grind_sizes", "compare_thermal", "compare_flavor",
     # 擬合

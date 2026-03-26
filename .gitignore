@@ -12,8 +12,15 @@ build/
 
 # Output images (generated on run)
 *.png
+!v60_simulation.png
+!v60_tds.png
+!v60_grind.png
+!v60_thermal.png
 
 # Editor
 .DS_Store
 .vscode/
 .idea/
+
+# Local tooling logs
+.playwright-mcp/

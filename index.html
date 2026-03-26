@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>V60 Pour-Over — Physics Reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet">
+<style>
+:root { --tr: 0.28s cubic-bezier(0.4,0,0.2,1); }
+[data-theme="dark"] {
+  --bg:#0a0c10; --bg-alt:#080a0e; --surface:#111318; --surface2:#0d0f14;
+  --border:#1e2330; --border-mid:#252d42; --border-hi:#2e3550;
+  --accent:#4af0c4; --accent2:#f0a24a; --accent3:#a24af0; --accent4:#4a8ff0;
+  --text-hi:#e8f0ff; --text:#c8d0e0; --text-mid:#8090b0; --text-dim:#4a5470;
+  --grid-line:rgba(78,140,255,0.04); --code-bg:rgba(255,255,255,0.04);
+  --row-div:rgba(255,255,255,0.03); --shadow:none; --shadow-sm:none;
+  --font-head:'Fraunces',serif; --font-body:'IBM Plex Sans',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace;
+}
+[data-theme="light"] {
+  --bg:#f4f5f8; --bg-alt:#eef0f4; --surface:#fff; --surface2:#f9fafb;
+  --border:#e4e7ef; --border-mid:#d0d5e4; --border-hi:#bec5d6;
+  --accent:#0aa87a; --accent2:#d97706; --accent3:#7c3aed; --accent4:#2563eb;
+  --text-hi:#111827; --text:#374151; --text-mid:#6b7280; --text-dim:#9ca3b8;
+  --grid-line:rgba(37,99,235,0.04); --code-bg:#f3f4f6;
+  --row-div:rgba(0,0,0,0.04);
+  --shadow:0 1px 3px rgba(0,0,0,0.07),0 1px 2px rgba(0,0,0,0.04);
+  --shadow-sm:0 1px 2px rgba(0,0,0,0.06);
+  --font-head:'Fraunces',serif; --font-body:'IBM Plex Sans',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace;
+}
+
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{transition:background var(--tr),color var(--tr)}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--font-body);
+  min-height:100vh; overflow-x:hidden;
+  transition:background var(--tr),color var(--tr);
+}
+body::before{
+  content:''; position:fixed; inset:0;
+  background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);
+  background-size:40px 40px; pointer-events:none; z-index:0;
+}
+
+/* ── LAYOUT ── */
+.page{position:relative;z-index:1;max-width:1160px;margin:0 auto;padding:52px 32px 96px}
+.section{margin-bottom:72px}
+.section-label{
+  font-family:var(--font-mono); font-size:10px;
+  letter-spacing:0.22em; text-transform:uppercase; color:var(--text-dim);
+  margin-bottom:22px; display:flex; align-items:center; gap:12px;
+  transition:color var(--tr);
+}
+.section-label::after{content:'';flex:1;height:1px;background:var(--border);transition:background var(--tr)}
+
+/* ── THEME TOGGLE ── */
+.theme-toggle{
+  position:fixed; top:22px; right:26px; z-index:100; cursor:pointer;
+  background:var(--surface); border:1px solid var(--border-hi); border-radius:24px;
+  padding:6px 14px; display:flex; align-items:center; gap:8px;
+  font-family:var(--font-mono); font-size:11px; color:var(--text-mid);
+  letter-spacing:0.05em; transition:all var(--tr); user-select:none;
+}
+.theme-toggle:hover{border-color:var(--accent4);color:var(--text-hi)}
+.toggle-icon{font-size:13px;transition:transform 0.4s ease}
+[data-theme="light"] .toggle-icon{transform:rotate(180deg)}
+
+/* ── HEADER ── */
+.header{
+  margin-bottom:68px; transition:border-color var(--tr);
+  display:grid; grid-template-columns:minmax(0,1.1fr) minmax(320px,0.9fr); gap:22px; align-items:start;
+}
+.header-tag{font-family:var(--font-mono);font-size:10px;letter-spacing:0.25em;text-transform:uppercase;color:var(--accent);margin-bottom:10px;transition:color var(--tr)}
+.header h1{font-family:var(--font-head);font-size:56px;font-weight:600;color:var(--text-hi);letter-spacing:-0.03em;line-height:0.94;margin-bottom:16px;transition:color var(--tr)}
+.header-sub{font-size:15px;color:var(--text-mid);max-width:640px;line-height:1.75}
+.header-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.hero-copy{padding:18px 22px 12px;border-left:3px solid var(--accent)}
+.hero-summary{
+  background:linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.02));
+  border:1px solid var(--border); border-radius:6px; padding:20px;
+}
+[data-theme="light"] .hero-summary{background:linear-gradient(180deg,rgba(37,99,235,0.04),rgba(37,99,235,0.015))}
+.hero-kicker{font-family:var(--font-mono);font-size:9px;letter-spacing:0.16em;text-transform:uppercase;color:var(--text-dim);margin-bottom:10px}
+.hero-lead{font-family:var(--font-head);font-size:25px;line-height:1.1;color:var(--text-hi);margin-bottom:12px}
+.hero-grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:4px;overflow:hidden;margin-top:16px}
+.hero-cell{background:var(--surface2);padding:13px 14px}
+.hero-label{font-family:var(--font-mono);font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px}
+.hero-value{font-family:var(--font-mono);font-size:22px;color:var(--text-hi)}
+.hero-note{font-size:12px;color:var(--text-mid);line-height:1.8}
+.chip{
+  font-family:var(--font-mono); font-size:9px; font-weight:600;
+  letter-spacing:0.08em; text-transform:uppercase;
+  padding:3px 9px; border-radius:2px; border:1px solid;
+  transition:all var(--tr);
+}
+.chip-c{color:var(--accent); border-color:rgba(74,240,196,0.3); background:rgba(74,240,196,0.07)}
+.chip-b{color:var(--accent4);border-color:rgba(74,143,240,0.3);background:rgba(74,143,240,0.07)}
+.chip-p{color:var(--accent3);border-color:rgba(162,74,240,0.3);background:rgba(162,74,240,0.07)}
+.chip-a{color:var(--accent2);border-color:rgba(240,162,74,0.3);background:rgba(240,162,74,0.07)}
+.guide-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:24px}
+.guide-card{
+  background:linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.015));
+  border:1px solid var(--border); border-radius:4px; padding:16px 16px 15px;
+  transition:all var(--tr);
+}
+[data-theme="light"] .guide-card{background:linear-gradient(180deg,rgba(37,99,235,0.04),rgba(37,99,235,0.015))}
+.guide-k{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.icon-badge{
+  width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+  font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--text-hi);
+  border:1px solid var(--border-hi); background:var(--surface2);
+}
+.guide-title{font-family:var(--font-mono);font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-hi)}
+.guide-body{font-size:12px;line-height:1.7;color:var(--text-mid)}
+
+/* ── PANEL ── */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:36px;transition:all var(--tr)}
+[data-theme="light"] .panel{border-radius:12px;box-shadow:var(--shadow)}
+.panel-sm{padding:20px 24px}
+
+/* ── GRID ── */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media(max-width:780px){.g2,.g3{grid-template-columns:1fr}.g4{grid-template-columns:1fr 1fr}}
+
+/* ── EQUATION BOX ── */
+.eq{
+  background:var(--surface2); border:1px solid var(--border);
+  border-left:3px solid var(--accent); border-radius:3px;
+  padding:14px 18px; margin:10px 0;
+  font-family:var(--font-mono); font-size:12.5px; color:var(--text-hi);
+  line-height:1.9; overflow-x:auto; transition:all var(--tr);
+}
+.eq.eq-b{border-left-color:var(--accent4)}
+.eq.eq-p{border-left-color:var(--accent3)}
+.eq.eq-a{border-left-color:var(--accent2)}
+.eq-label{font-size:9px;color:var(--text-dim);letter-spacing:0.15em;text-transform:uppercase;margin-bottom:6px}
+.sym-c{color:var(--accent)} .sym-b{color:var(--accent4)} .sym-p{color:var(--accent3)} .sym-a{color:var(--accent2)}
+.sym-dim{color:var(--text-dim)}
+
+/* ── INLINE CODE ── */
+.ic{background:var(--code-bg);border:1px solid var(--border-hi);border-radius:2px;padding:1px 6px;font-family:var(--font-mono);font-size:10.5px;color:var(--text);transition:all var(--tr)}
+[data-theme="light"] .ic{color:var(--accent4);border-color:var(--border-mid)}
+
+/* ── CANVAS WRAPPER ── */
+.canvas-wrap{position:relative;width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:3px;overflow:hidden;transition:all var(--tr)}
+[data-theme="light"] .canvas-wrap{border-radius:10px;box-shadow:var(--shadow-sm)}
+canvas{display:block;width:100%;height:auto}
+
+/* ── STAT ROW ── */
+.stat-row{display:flex;gap:1px;border:1px solid var(--border);border-radius:3px;overflow:hidden;margin-bottom:14px}
+.stat-cell{flex:1;background:var(--surface2);padding:14px 16px;text-align:center;transition:all var(--tr)}
+.stat-cell:not(:last-child){border-right:1px solid var(--border)}
+.sc-name{font-family:var(--font-mono);font-size:9px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px}
+.sc-val{font-family:var(--font-mono);font-size:20px;font-weight:600;color:var(--text-hi)}
+.sc-unit{font-size:10px;color:var(--text-dim);font-weight:400}
+
+/* ── COUPLING MAP ── */
+.coupling-wrap{position:relative;overflow:hidden}
+.coupling-svg{width:100%;height:auto;display:block}
+
+/* ── TABLE ── */
+.t{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:11px}
+.t th{text-align:left;padding:8px 12px;font-size:9px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);font-weight:400;border-bottom:1px solid var(--border-mid)}
+.t td{padding:9px 12px;border-bottom:1px solid var(--row-div);color:var(--text);vertical-align:top}
+.t tr:last-child td{border-bottom:none}
+.t tr:hover td{background:rgba(255,255,255,0.015)}
+[data-theme="light"] .t tr:hover td{background:rgba(37,99,235,0.025)}
+
+/* ── LEGEND DOT ── */
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
+
+/* ── PROGRESS BAR ── */
+.pbar{height:4px;border-radius:99px;margin-top:8px;overflow:hidden;background:var(--border)}
+.pbar-fill{height:100%;border-radius:99px;transition:width 0.8s ease}
+
+/* ── FLOW LEGEND ── */
+.flow-legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:12px;font-family:var(--font-mono);font-size:10px;color:var(--text-dim)}
+.fl-item{display:flex;align-items:center;gap:6px}
+.fl-line{width:20px;height:2px}
+.section-intro{font-size:12px;line-height:1.8;color:var(--text-mid);margin-bottom:16px}
+.read-stack,.callout-grid{display:grid;gap:10px}
+.read-item,.callout-card{
+  background:var(--surface2);border:1px solid var(--border);border-radius:4px;
+  padding:12px 14px; transition:all var(--tr);
+}
+.read-item{display:grid;grid-template-columns:28px 1fr;gap:12px;align-items:start}
+.read-n{
+  width:28px;height:28px;border-radius:50%;display:grid;place-items:center;
+  font-family:var(--font-mono);font-size:11px;font-weight:700;color:var(--text-hi);
+  background:linear-gradient(135deg,rgba(74,240,196,0.12),rgba(74,143,240,0.12));
+  border:1px solid var(--border-hi);
+}
+.read-title,.callout-title{font-family:var(--font-mono);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-hi);margin-bottom:5px}
+.read-copy,.callout-copy{font-size:12px;line-height:1.7;color:var(--text-mid)}
+.chart-stack{display:flex;flex-direction:column;gap:12px}
+.chart-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}
+.chart-title{font-family:var(--font-mono);font-size:10px;color:var(--text-dim);letter-spacing:0.12em;text-transform:uppercase}
+.chart-sub{font-size:12px;line-height:1.7;color:var(--text-mid);max-width:420px;margin-top:7px}
+.figure-img{display:block;width:100%;height:auto}
+.figure-note{font-size:12px;line-height:1.8;color:var(--text-mid)}
+.eyebrow{font-family:var(--font-mono);font-size:9px;letter-spacing:0.16em;text-transform:uppercase;color:var(--text-dim);margin-bottom:10px}
+.showcase-shell{display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr);gap:24px;align-items:center}
+.showcase-copy{display:flex;flex-direction:column;gap:14px}
+.showcase-title{font-family:var(--font-head);font-size:38px;line-height:1.02;color:var(--text-hi)}
+.showcase-text{font-size:14px;line-height:1.85;color:var(--text-mid)}
+.showcase-list{display:grid;gap:10px}
+.showcase-item{
+  background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px 14px;
+  font-size:13px;line-height:1.75;color:var(--text-mid);
+}
+.showcase-item strong{color:var(--text-hi);font-family:var(--font-mono);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;display:block;margin-bottom:5px}
+.quick-code{margin-top:4px}
+.quick-code code{
+  display:block;padding:14px 16px;background:var(--surface2);border:1px solid var(--border);
+  border-radius:4px;font-family:var(--font-mono);font-size:12px;color:var(--text-hi)
+}
+.signal-grid,.tech-grid{display:grid;gap:10px}
+.signal-grid{grid-template-columns:1fr 1fr}
+.tech-grid{grid-template-columns:repeat(3,1fr)}
+.signal-card,.tech-card{
+  background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:13px 14px;
+}
+.signal-card strong,.tech-card strong{
+  color:var(--text-hi);font-family:var(--font-mono);font-size:10px;letter-spacing:0.12em;text-transform:uppercase;display:block;margin-bottom:6px
+}
+.signal-card,.tech-card{font-size:12px;line-height:1.75;color:var(--text-mid)}
+.story-grid{display:grid;grid-template-columns:minmax(0,0.82fr) minmax(0,1.18fr);gap:24px;align-items:start}
+.story-grid.alt{grid-template-columns:minmax(0,1.1fr) minmax(0,0.9fr)}
+.story-copy{display:flex;flex-direction:column;gap:14px}
+.story-figure{display:flex;flex-direction:column;gap:12px}
+.section-panel{padding:26px}
+.mini-note{
+  background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:12px 14px;
+  font-size:12px;line-height:1.8;color:var(--text-mid);
+}
+.metric-strip{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border);
+  border:1px solid var(--border);border-radius:4px;overflow:hidden;
+}
+.metric-card{background:var(--surface2);padding:12px 14px}
+.metric-label{font-family:var(--font-mono);font-size:9px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-dim);margin-bottom:6px}
+.metric-value{font-family:var(--font-mono);font-size:18px;color:var(--text-hi)}
+.metric-note{font-size:11px;color:var(--text-dim);margin-top:4px}
+.callout-grid{grid-template-columns:repeat(3,1fr)}
+
+/* V60 ANIMATION */
+@keyframes water-drop{0%{opacity:0;transform:translateY(-4px)}50%{opacity:1}100%{opacity:0;transform:translateY(4px)}}
+@keyframes bubble-rise{0%{opacity:0;transform:translateY(0)}40%{opacity:0.7}100%{opacity:0;transform:translateY(-30px)}}
+@keyframes pulse-flow{0%,100%{opacity:0.3}50%{opacity:0.9}}
+@media(max-width:780px){
+  .guide-grid,.callout-grid,.metric-strip,.signal-grid,.tech-grid{grid-template-columns:1fr}
+  .chart-head{flex-direction:column}
+  .header,.story-grid,.story-grid.alt,.showcase-shell{grid-template-columns:1fr}
+  .header h1{font-size:42px}
+  .showcase-title{font-size:31px}
+}
+</style>
+</head>
+<body>
+
+<div class="theme-toggle" onclick="toggleTheme()">
+  <span class="toggle-icon">◐</span><span id="tlabel">DARK</span>
+</div>
+
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="hero-copy">
+      <div class="header-tag">Technical Reference · Physics Simulation</div>
+      <h1>V60 Pour-Over<br>Physics Engine</h1>
+      <p class="header-sub">
+        A landing page for the current simulator: pressure-driven flow, extraction chemistry,
+        bypass, and thermal coupling rendered as generated figures instead of hand-drawn placeholders.
+      </p>
+      <div class="header-meta">
+        <span class="chip chip-c">Darcy / Kozeny-Carman</span>
+        <span class="chip chip-b">Noyes-Whitney</span>
+        <span class="chip chip-p">CO₂ Back-Pressure</span>
+        <span class="chip chip-a">Newton Cooling</span>
+      </div>
+      <div class="guide-grid">
+        <div class="guide-card">
+          <div class="guide-k">
+            <div class="icon-badge" style="color:var(--accent4)">01</div>
+            <div class="guide-title">See The Brew</div>
+          </div>
+          <div class="guide-body">Start with the generated figures. They now come from the simulator output, so the page is showing the actual model state instead of decorative diagrams.</div>
+        </div>
+        <div class="guide-card">
+          <div class="guide-k">
+            <div class="icon-badge" style="color:var(--accent)">02</div>
+            <div class="guide-title">Read The Tradeoffs</div>
+          </div>
+          <div class="guide-body">Each section pairs one visual story with just enough equations to explain what pushes the curves where they go.</div>
+        </div>
+        <div class="guide-card">
+          <div class="guide-k">
+            <div class="icon-badge" style="color:var(--accent2)">03</div>
+            <div class="guide-title">Compare Regimes</div>
+          </div>
+          <div class="guide-body">The page is optimized to compare grind, thermal regime, and permeability loss without needing to cross-reference multiple tabs.</div>
+        </div>
+      </div>
+    </div>
+    <div class="hero-summary">
+      <div class="hero-kicker">Current Baseline</div>
+      <div class="hero-lead">Medium grind, 93°C, generated outputs wired straight into the page.</div>
+      <div class="hero-note">This reference currently behaves like a slightly under-extracted everyday brew: realistic flow diagnostics, realistic bypass, but a conservative cup-side EY.</div>
+      <div class="hero-grid">
+        <div class="hero-cell">
+          <div class="hero-label">Cup TDS</div>
+          <div class="hero-value">1.11%</div>
+        </div>
+        <div class="hero-cell">
+          <div class="hero-label">Cup EY</div>
+          <div class="hero-value">16.4%</div>
+        </div>
+        <div class="hero-cell">
+          <div class="hero-label">Avg bypass</div>
+          <div class="hero-value">1.7%</div>
+        </div>
+        <div class="hero-cell">
+          <div class="hero-label">LRR</div>
+          <div class="hero-value">2.23</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Project Showcase</div>
+    <div class="panel section-panel">
+      <div class="showcase-shell">
+        <div class="showcase-copy">
+          <div class="eyebrow">Why This Repo Exists</div>
+          <div class="showcase-title">A pour-over simulator that treats flow, temperature, and extraction as one coupled physical system.</div>
+          <div class="showcase-text">Most coffee tools stop at recipe calculators or static brew ratios. This project instead tracks the bed as a changing porous medium: water head builds and collapses, permeability decays, bypass opens late, temperature shifts both viscosity and extraction, and the final cup is read from generated outputs.</div>
+          <div class="showcase-list">
+            <div class="showcase-item">
+              <strong>Flow First</strong>
+              Water level, bypass, permeability loss, and saturation are treated as first-class outputs, not hidden assumptions.
+            </div>
+            <div class="showcase-item">
+              <strong>Extraction Split</strong>
+              The cup-side result is decomposed into fast and slow soluble pools instead of one opaque concentration curve.
+            </div>
+            <div class="showcase-item">
+              <strong>Comparable Regimes</strong>
+              Grind and temperature comparisons are generated from the same model, so the figures can be read as a coherent family.
+            </div>
+          </div>
+          <div class="quick-code"><code>uv run python -m pour_over</code></div>
+        </div>
+        <div class="story-figure">
+          <div class="canvas-wrap">
+            <img class="figure-img" src="v60_grind.png" alt="V60 grind showcase figure">
+          </div>
+          <div class="figure-note">The lead figure is the grind outcome map: dynamic head, outflow, cup TDS trajectory, and the final cup position against the target window.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 01  FLOW CROSS-SECTION ══════════════════════════════════════ -->
+  <div class="section">
+    <div class="section-label">01 &nbsp; Flow Story</div>
+    <div class="panel section-panel">
+    <div class="story-grid">
+
+      <!-- SVG Diagram -->
+      <div class="canvas-wrap" style="padding:0">
+        <svg id="v60svg" viewBox="0 0 500 410" xmlns="http://www.w3.org/2000/svg" style="display:block;width:100%">
+          <defs>
+            <linearGradient id="waterGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#4a8ff0" stop-opacity="0.55"/>
+              <stop offset="100%" stop-color="#4a8ff0" stop-opacity="0.25"/>
+            </linearGradient>
+            <linearGradient id="bedGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#9b7355" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#5c3d22" stop-opacity="1"/>
+            </linearGradient>
+            <marker id="arrowC" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="#4af0c4" opacity="0.9"/>
+            </marker>
+            <marker id="arrowB" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="#4a8ff0" opacity="0.8"/>
+            </marker>
+            <marker id="arrowO" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 Z" fill="#f0a24a" opacity="0.8"/>
+            </marker>
+            <!--
+              V60 inverted cone (funnel): wide at top, narrow at bottom
+              Top rim  : (65, 38) → (435, 38)
+              Bottom   : (222, 345) → (278, 345)   small drain opening
+              Left wall : (65,38)→(222,345)  slope: Δx/Δy = 157/307 ≈ 0.511
+              Right wall: (435,38)→(278,345) slope: -157/307
+            -->
+            <clipPath id="coneClip">
+              <polygon points="65,38 435,38 278,345 222,345"/>
+            </clipPath>
+          </defs>
+
+          <!-- ── Outer cone body (inverted funnel) ── -->
+          <polygon points="65,38 435,38 278,345 222,345"
+            fill="#0a0c14" stroke="#2e3550" stroke-width="1.5"/>
+
+          <!-- Rim highlight at top -->
+          <line x1="65" y1="38" x2="435" y2="38" stroke="#3a4560" stroke-width="2"/>
+
+          <!-- ── Ribs (vertical channels on inner wall) ── -->
+          <!-- Left-side ribs -->
+          <line x1="120" y1="42" x2="198" y2="295" stroke="#1e2840" stroke-width="1.2" stroke-dasharray="5,4"/>
+          <line x1="160" y1="42" x2="206" y2="295" stroke="#1e2840" stroke-width="1.0" stroke-dasharray="4,5"/>
+          <!-- Right-side ribs -->
+          <line x1="380" y1="42" x2="302" y2="295" stroke="#1e2840" stroke-width="1.2" stroke-dasharray="5,4"/>
+          <line x1="340" y1="42" x2="294" y2="295" stroke="#1e2840" stroke-width="1.0" stroke-dasharray="4,5"/>
+          <!-- Center rib -->
+          <line x1="250" y1="42" x2="250" y2="295" stroke="#1a2236" stroke-width="0.8" stroke-dasharray="3,5"/>
+
+          <!-- ── Coffee bed (trapezoid near bottom of cone) ── -->
+          <!--
+            At y=295: x_left=65+157*(295-38)/307≈196, x_right=304
+            At y=345: x_left=222, x_right=278
+          -->
+          <polygon id="bedPoly" points="196,295 304,295 278,345 222,345"
+            fill="url(#bedGrad)"/>
+          <!-- Bed surface grain lines -->
+          <line x1="198" y1="297" x2="302" y2="297" stroke="#b08060" stroke-width="0.6" opacity="0.5"/>
+          <line x1="200" y1="303" x2="300" y2="303" stroke="#b08060" stroke-width="0.5" opacity="0.35"/>
+          <line x1="203" y1="309" x2="297" y2="309" stroke="#b08060" stroke-width="0.4" opacity="0.25"/>
+
+          <!-- ── Water body (animated, fills inverted cone above bed) ── -->
+          <!--
+            Water fills from bed top (y=295) upward.
+            At water level y_w: x_l=65+157*(y_w-38)/307, x_r=435-157*(y_w-38)/307
+            Polygon: (x_l,y_w)→(x_r,y_w)→(304,295)→(196,295)
+            Initial level: y_w ≈ 160 (mid-pour)
+          -->
+          <polygon id="waterPoly"
+            points="140,160 360,160 304,295 196,295"
+            fill="url(#waterGrad)" clip-path="url(#coneClip)"/>
+          <!-- Water surface shimmer -->
+          <line id="waterSurface" x1="140" y1="160" x2="360" y2="160"
+            stroke="#4a8ff0" stroke-width="1.2" opacity="0.6"/>
+
+          <!-- ── CO₂ bubbles rising from bed through water ── -->
+          <g id="bubbles" opacity="0.75">
+            <circle class="bubble" cx="222" cy="285" r="2.2" fill="none" stroke="#f0a24a" stroke-width="0.9"/>
+            <circle class="bubble" cx="250" cy="278" r="1.8" fill="none" stroke="#f0a24a" stroke-width="0.9"/>
+            <circle class="bubble" cx="278" cy="283" r="2.5" fill="none" stroke="#f0a24a" stroke-width="0.9"/>
+            <circle class="bubble" cx="237" cy="268" r="1.5" fill="none" stroke="#f0a24a" stroke-width="0.8"/>
+            <circle class="bubble" cx="263" cy="260" r="2.0" fill="none" stroke="#f0a24a" stroke-width="0.8"/>
+          </g>
+
+          <!-- ── Darcy extraction flow through bed (downward) ── -->
+          <g id="darcyArrows">
+            <line x1="228" y1="290" x2="232" y2="360" stroke="#4af0c4" stroke-width="1.4" stroke-dasharray="5,3" marker-end="url(#arrowC)" opacity="0.85"/>
+            <line x1="250" y1="292" x2="250" y2="362" stroke="#4af0c4" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrowC)" opacity="0.95"/>
+            <line x1="272" y1="290" x2="268" y2="360" stroke="#4af0c4" stroke-width="1.4" stroke-dasharray="5,3" marker-end="url(#arrowC)" opacity="0.85"/>
+          </g>
+
+          <!-- ── Bypass flow along rib channels (downward along walls) ── -->
+          <line x1="137" y1="160" x2="205" y2="290" stroke="#f0a24a" stroke-width="1.3" stroke-dasharray="5,3" marker-end="url(#arrowO)" opacity="0.7"/>
+          <line x1="363" y1="160" x2="295" y2="290" stroke="#f0a24a" stroke-width="1.3" stroke-dasharray="5,3" marker-end="url(#arrowO)" opacity="0.7"/>
+
+          <!-- ── Water pour entering from top ── -->
+          <g opacity="0.7">
+            <line x1="250" y1="0"  x2="250" y2="36" stroke="#4a8ff0" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrowB)"/>
+            <line x1="244" y1="5"  x2="244" y2="26" stroke="#4a8ff0" stroke-width="1.2" opacity="0.5"/>
+            <line x1="256" y1="5"  x2="256" y2="26" stroke="#4a8ff0" stroke-width="1.2" opacity="0.5"/>
+          </g>
+
+          <!-- ── Output Q_ext exits through drain opening ── -->
+          <line x1="250" y1="347" x2="250" y2="400" stroke="#4af0c4" stroke-width="2.0" marker-end="url(#arrowC)" opacity="0.9"/>
+
+          <!-- ── Labels ── -->
+          <!-- Q_in -->
+          <text x="262" y="16" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4a8ff0">Q_in</text>
+
+          <!-- h(t): water level indicator, left side -->
+          <line id="hLine" x1="55" y1="160" x2="140" y2="160" stroke="#4a5470" stroke-width="0.8" stroke-dasharray="3,3"/>
+          <text x="50" y="164" font-family="IBM Plex Mono,monospace" font-size="11" fill="#4af0c4" text-anchor="end">h(t)</text>
+
+          <!-- h_bed: right side bracket for bed thickness -->
+          <line x1="445" y1="295" x2="310" y2="295" stroke="#4a5470" stroke-width="0.7" stroke-dasharray="2,3"/>
+          <line x1="445" y1="345" x2="284" y2="345" stroke="#4a5470" stroke-width="0.7" stroke-dasharray="2,3"/>
+          <line x1="445" y1="295" x2="445" y2="345" stroke="#4a5470" stroke-width="0.7"/>
+          <text x="450" y="323" font-family="IBM Plex Mono,monospace" font-size="9" fill="#8090b0">h_bed</text>
+
+          <!-- Q_bp label -->
+          <text x="370" y="230" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f0a24a">Q_bp</text>
+
+          <!-- CO₂ label -->
+          <text x="285" y="268" font-family="IBM Plex Mono,monospace" font-size="9" fill="#f0a24a" opacity="0.9">CO₂↑</text>
+
+          <!-- Q_ext label -->
+          <text x="258" y="390" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4af0c4">Q_ext</text>
+
+          <!-- h_cap marker: small line near bottom of bed -->
+          <line x1="234" y1="338" x2="266" y2="338" stroke="#a24af0" stroke-width="0.9" stroke-dasharray="2,2"/>
+          <text x="210" y="342" font-family="IBM Plex Mono,monospace" font-size="8" fill="#a24af0" text-anchor="end">h_cap</text>
+
+          <!-- Cone wall labels -->
+          <text x="92" y="200" font-family="IBM Plex Mono,monospace" font-size="8" fill="#2e3550" transform="rotate(-27,92,200)">rib channel</text>
+        </svg>
+      </div>
+
+      <!-- Physics equations for this section -->
+      <div class="story-copy">
+        <div class="eyebrow">Hydraulic Mechanism</div>
+        <div class="showcase-title" style="font-size:33px">The brew is controlled by pressure head, bed resistance, and late-opening bypass.</div>
+        <div class="showcase-text">This section is the hydraulic backbone of the model. The state does not assume one fixed flow path: water can go through the bed, be blocked by capillary and gas thresholds, or divert into wall-channel bypass once free-water head becomes large enough.</div>
+        <div class="signal-grid">
+          <div class="signal-card">
+            <strong>Drive</strong>
+            `h(t)` and `Q_in` raise the pressure head. This is the immediate term that pushes water through the porous bed.
+          </div>
+          <div class="signal-card">
+            <strong>Resistance</strong>
+            `k_eff` decays with fines migration, swelling, and compression, so the same recipe can move into a slower hydraulic regime.
+          </div>
+          <div class="signal-card">
+            <strong>Threshold</strong>
+            `h_cap` and `h_gas(t)` subtract from usable head, which is why early brew flow can stay suppressed even with visible water above the bed.
+          </div>
+          <div class="signal-card">
+            <strong>Leakage Path</strong>
+            `Q_bp` stays small at low head and opens later, so bypass is modeled as a head-activated parallel pathway rather than a constant loss.
+          </div>
+        </div>
+        <div class="eq-label">Darcy extraction flow</div>
+        <div class="eq">
+          <span class="sym-c">Q_ext</span> ∝ <span class="sym-b">k_eff</span> · h_eff / μ(<span class="sym-a">T</span>)
+          <br><span class="sym-dim">h_eff = h − h_cap − h_gas(t) + h_cap,wet</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:16px">Fine migration clogging</div>
+        <div class="eq eq-b">
+          <span class="sym-b">k_eff</span>(<span class="sym-c">V_out</span>) = k₀ / (1 + β · <span class="sym-c">V_out</span>)
+        </div>
+
+        <div class="eq-label" style="margin-top:16px">CO₂ back-pressure decay</div>
+        <div class="eq eq-a">
+          <span class="sym-p">h_gas</span>(t) = h_gas₀ · exp(−t / τ<sub>CO₂</sub>)
+          <br><span class="sym-dim">τ_CO₂ ≈ 35 s　（Cameron et al. 2020）</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:16px">Bypass flow (rib channels)</div>
+        <div class="eq eq-a">
+          <span class="sym-a">Q_bp</span> = ψ · h_free · shape(h_free) · activation(h_free)
+          <br><span class="sym-dim">low water head ≈ no bypass; higher free-water head opens rib-channel flow</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:16px">Particle swelling — Kozeny-Carman</div>
+        <div class="eq eq-p">
+          φ(sat) = φ₀ − Δφ · sat
+          <br>k ∝ φ³ / (1−φ)²　<span class="sym-dim">pore connectivity</span>
+        </div>
+        <div class="mini-note">In the generated diagnostics, this logic resolves into measurable outputs: water-head collapse, bypass spikes, permeability retention, and the point where the bed becomes fully wetted.</div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ══ 02  EXTRACTION KINETICS ═════════════════════════════════════ -->
+  <div class="section">
+    <div class="section-label">02 &nbsp; Extraction Story</div>
+    <div class="panel section-panel">
+    <div class="story-grid alt">
+      <div class="story-copy">
+        <div class="eq-label">Shrinking-core accessibility (bed pore)</div>
+        <div class="eq">
+          C_eff = C_sat(<span class="sym-a">T</span>) · (<span class="sym-c">M</span> / M₀)<sup>β</sup>,  β = 1.5
+        </div>
+
+        <div class="eq-label" style="margin-top:14px">Noyes-Whitney transport rate</div>
+        <div class="eq eq-b">
+          k_ext(<span class="sym-a">T</span>) = η · A_eff · D(<span class="sym-a">T</span>) / L_eff · exp(−<span class="sym-b">Eₐ</span> / R<span class="sym-a">T</span>)
+        </div>
+
+        <div class="eq-label" style="margin-top:14px">Bed concentration ODE — CSTR model</div>
+        <div class="eq eq-p">
+          d<span class="sym-p">C</span>/dt = k_ext · (C_eff − <span class="sym-p">C</span>) · Q_ext / V_liq
+          <br>　　 − <span class="sym-p">C</span> · Q_ext / V_liq
+        </div>
+
+        <div class="eq-label" style="margin-top:14px">Solid-phase depletion</div>
+        <div class="eq">
+          d<span class="sym-c">M</span>/dt = −k_ext · (C_eff − <span class="sym-p">C</span>) · V_liq · f(<span class="sym-p">C</span>)
+        </div>
+
+        <!-- Activation energy comparison -->
+        <div style="margin-top:20px">
+          <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-dim);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:12px">Activation Energy — Roast × Component</div>
+          <div style="font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:8px">
+            <div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                <span style="color:var(--accent4)">Fast (Acids / Sweetness)</span>
+                <span style="color:var(--text-dim)">Eₐ = 15 kJ/mol</span>
+              </div>
+              <div class="pbar"><div class="pbar-fill" style="width:25%;background:var(--accent4)"></div></div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                <span style="color:var(--accent)">Slow — Light roast (Eₐ_slow)</span>
+                <span style="color:var(--text-dim)">Eₐ = 50 kJ/mol</span>
+              </div>
+              <div class="pbar"><div class="pbar-fill" style="width:83%;background:var(--accent)"></div></div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                <span style="color:var(--accent)">Slow — Medium roast</span>
+                <span style="color:var(--text-dim)">Eₐ = 45 kJ/mol</span>
+              </div>
+              <div class="pbar"><div class="pbar-fill" style="width:75%;background:var(--accent)"></div></div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                <span style="color:var(--accent2)">Slow — Dark roast</span>
+                <span style="color:var(--text-dim)">Eₐ = 38 kJ/mol</span>
+              </div>
+              <div class="pbar"><div class="pbar-fill" style="width:63%;background:var(--accent2)"></div></div>
+            </div>
+          </div>
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);margin-top:10px">
+            Eₐ_slow ≫ Eₐ_fast → higher T amplifies bitter extraction disproportionately
+          </div>
+        </div>
+      </div>
+
+      <div class="story-figure">
+        <div class="chart-stack">
+          <div class="chart-head">
+            <div>
+              <div class="chart-title">Generated Output — Extraction Quality</div>
+              <div class="chart-sub">This figure now comes directly from the simulation output. It shows bed concentration, outflow concentration, cup TDS, and the split between dissolved EY and in-cup EY in one place.</div>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <img class="figure-img" src="v60_tds.png" alt="V60 extraction quality output figure">
+          </div>
+          <div class="figure-note">Current medium baseline in the generated figure: cup TDS about 1.11%, in-cup EY about 16.4%, and fast compounds contribute roughly 60% of the cup-side extraction.</div>
+          <div class="mini-note">Physically, this is the section where internal availability, transport path length, and cup-side dilution stop being abstract symbols and become a cup-strength trajectory.</div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ══ 03  ODE COUPLING MAP ════════════════════════════════════════ -->
+  <div class="section">
+    <div class="section-label">03 &nbsp; System Map</div>
+    <div class="panel section-panel">
+      <div class="story-copy" style="margin-bottom:16px">
+        <div class="eyebrow">Model Architecture</div>
+        <div class="showcase-title" style="font-size:33px">One state trajectory, multiple technical surfaces.</div>
+        <div class="showcase-text">The simulator is built so that flow, thermal, and extraction outputs are all projections of the same coupled ODE state. This is why the figures on the page can be compared directly: they are not separate calculators stitched together after the fact.</div>
+        <div class="tech-grid">
+          <div class="tech-card">
+            <strong>State Layer</strong>
+            `h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T`
+          </div>
+          <div class="tech-card">
+            <strong>Closure Layer</strong>
+            Darcy flow, bypass activation, wet-bed capillary head, roast-dependent chemistry, and Newton cooling.
+          </div>
+          <div class="tech-card">
+            <strong>Output Layer</strong>
+            Brew time, drain time, TDS, in-cup EY, dissolved EY, D10 diagnostics, and fast/slow flavor balance.
+          </div>
+        </div>
+      </div>
+    <div class="panel" style="padding:28px;background:var(--surface2);border:1px solid var(--border)">
+      <svg viewBox="0 0 1060 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block">
+        <defs>
+          <marker id="arr" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4a5470"/>
+          </marker>
+          <marker id="arr-c" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4af0c4"/>
+          </marker>
+          <marker id="arr-b" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4a8ff0"/>
+          </marker>
+          <marker id="arr-p" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#a24af0"/>
+          </marker>
+          <marker id="arr-a" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
+            <path d="M0,0 L7,3.5 L0,7 Z" fill="#f0a24a"/>
+          </marker>
+        </defs>
+
+        <!--
+          Layout (left→right causal flow):
+          Col 1 (x~67):  V_poured  — protocol input
+          Col 2 (x~245): h (top), V_out (bottom)  — fluid state
+          Col 3 (x~432): T  — thermal hub
+          Col 4 (x~612): C_fast (top), M_fast (bottom)  — fast extraction pair
+          Col 5 (x~787): C_slow (top), M_slow (bottom)  — slow extraction pair
+          Col 6 (x~962): TDS (top), EY (bottom)  — derived outputs
+          h→C arcs routed above all nodes (y<55) to avoid crossings with T
+        -->
+
+        <!-- ── Col 1: Protocol input ── -->
+        <rect x="10" y="90" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
+        <text x="67" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">V_poured</text>
+        <text x="67" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">cumul. input</text>
+
+        <!-- ── Col 2: Fluid state ── -->
+        <rect x="195" y="90" width="100" height="46" rx="2" fill="#111318" stroke="#4af0c4" stroke-width="1.2"/>
+        <text x="245" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600" fill="#4af0c4">h</text>
+        <text x="245" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">water level</text>
+
+        <rect x="195" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
+        <text x="252" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">V_out</text>
+        <text x="252" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">cumul. output</text>
+
+        <!-- ── Col 3: Thermal hub ── -->
+        <rect x="382" y="128" width="100" height="46" rx="2" fill="#111318" stroke="#f0a24a" stroke-width="1.2"/>
+        <text x="432" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600" fill="#f0a24a">T</text>
+        <text x="432" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">temperature</text>
+
+        <!-- ── Col 4: Fast extraction pair ── -->
+        <rect x="555" y="57" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
+        <text x="612" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">C_fast</text>
+        <text x="612" y="97" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">acid/sweet [g/L]</text>
+
+        <rect x="555" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#4af0c4" stroke-width="1.2"/>
+        <text x="612" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4af0c4">M_fast</text>
+        <text x="612" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid fast [g]</text>
+
+        <!-- ── Col 5: Slow extraction pair ── -->
+        <rect x="730" y="57" width="115" height="46" rx="2" fill="#111318" stroke="#a24af0" stroke-width="1.2"/>
+        <text x="787" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#a24af0">C_slow</text>
+        <text x="787" y="97" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">bitter/astringent</text>
+
+        <rect x="730" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#a24af0" stroke-width="1.2"/>
+        <text x="787" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#a24af0">M_slow</text>
+        <text x="787" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid slow [g]</text>
+
+        <!-- ── Col 6: Derived outputs ── -->
+        <rect x="912" y="90" width="100" height="46" rx="2" fill="#0d0f14" stroke="#2e3550" stroke-width="1"/>
+        <text x="962" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#8090b0">TDS</text>
+        <text x="962" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">g/L in cup</text>
+
+        <rect x="912" y="185" width="100" height="46" rx="2" fill="#0d0f14" stroke="#2e3550" stroke-width="1"/>
+        <text x="962" y="212" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#8090b0">EY %</text>
+        <text x="962" y="225" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">extraction yield</text>
+
+        <!-- ══ EDGES ══ -->
+
+        <!-- V_poured → h (Q_in protocol input) -->
+        <line x1="125" y1="113" x2="195" y2="113" stroke="#4a8ff0" stroke-width="1.2" marker-end="url(#arr-b)"/>
+        <text x="160" y="108" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a8ff0">Q_in</text>
+
+        <!-- V_poured → h (bloom sat → k_eff, secondary) -->
+        <path d="M 125,130 Q 160,150 195,130" stroke="#4a8ff0" stroke-width="0.8" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
+        <text x="158" y="151" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">sat</text>
+
+        <!-- h → V_out (Q_ext accumulation, vertical) -->
+        <line x1="245" y1="136" x2="252" y2="192" stroke="#4a8ff0" stroke-width="1.2" marker-end="url(#arr-b)"/>
+        <text x="265" y="165" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a8ff0">Q_ext</text>
+
+        <!-- V_out → h (β·clog feedback, left arc) -->
+        <path d="M 195,215 C 142,215 142,113 195,113" stroke="#4a8ff0" stroke-width="0.9" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-c)"/>
+        <text x="126" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">β·clog</text>
+
+        <!-- h → C_fast (top arc, above all nodes) -->
+        <path d="M 295,104 Q 500,12 612,57" stroke="#4af0c4" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr-b)"/>
+
+        <!-- h → C_slow (higher top arc) -->
+        <path d="M 295,108 Q 620,8 787,57" stroke="#4af0c4" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr-p)"/>
+
+        <!-- Arc label shared -->
+        <text x="510" y="22" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4af0c4">Q_ext / dilution</text>
+
+        <!-- T → h (μ(T) affects flow rate, left arc) -->
+        <path d="M 382,145 Q 340,90 295,113" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-c)"/>
+        <text x="320" y="85" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f0a24a">μ(T)→Q</text>
+
+        <!-- T → C_fast (Arrhenius k_ext) -->
+        <path d="M 482,148 Q 520,120 555,100" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
+        <text x="504" y="117" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f0a24a">k_ext(T)</text>
+
+        <!-- T → C_slow -->
+        <path d="M 482,151 Q 606,168 730,100" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-p)"/>
+
+        <!-- Newton cooling input to T (from below) -->
+        <line x1="432" y1="238" x2="432" y2="174" stroke="#4a5470" stroke-width="0.8" stroke-dasharray="2,3" marker-end="url(#arr-a)"/>
+        <text x="445" y="248" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">T_amb</text>
+
+        <!-- C_fast ↔ M_fast (depletion coupling) -->
+        <line x1="622" y1="103" x2="622" y2="192" stroke="#4a8ff0" stroke-width="1" marker-end="url(#arr-c)"/>
+        <line x1="602" y1="192" x2="602" y2="103" stroke="#4af0c4" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
+
+        <!-- C_slow ↔ M_slow -->
+        <line x1="797" y1="103" x2="797" y2="192" stroke="#a24af0" stroke-width="1" marker-end="url(#arr-p)"/>
+        <line x1="777" y1="192" x2="777" y2="103" stroke="#a24af0" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arr-p)"/>
+
+        <!-- C_fast → TDS -->
+        <path d="M 670,80 Q 791,60 912,113" stroke="#4a5470" stroke-width="1" fill="none" marker-end="url(#arr)"/>
+
+        <!-- C_slow → TDS -->
+        <path d="M 845,78 Q 900,64 962,90" stroke="#4a5470" stroke-width="1" fill="none" marker-end="url(#arr)"/>
+
+        <!-- TDS → EY -->
+        <line x1="962" y1="136" x2="962" y2="185" stroke="#4a5470" stroke-width="0.9" marker-end="url(#arr)"/>
+
+        <!-- Legend -->
+        <line x1="20"  y1="278" x2="50"  y2="278" stroke="#4af0c4" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="56"  y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">fluid coupling</text>
+        <line x1="155" y1="278" x2="185" y2="278" stroke="#f0a24a" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="191" y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">thermal coupling</text>
+        <line x1="310" y1="278" x2="340" y2="278" stroke="#a24af0" stroke-width="1" stroke-dasharray="3,3"/>
+        <text x="346" y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid↔pore</text>
+      </svg>
+    </div>
+    <div class="mini-note" style="margin-top:14px">The left-to-right map reads as protocol input → hydraulic state → thermal state → extraction state → cup outputs. That ordering is intentional: it keeps local reasoning possible while preserving the coupled physics.</div>
+    </div>
+  </div>
+
+  <!-- ══ 04  THERMODYNAMICS ═══════════════════════════════════════════ -->
+  <div class="section">
+    <div class="section-label">04 &nbsp; Temperature Regime</div>
+    <div class="panel section-panel">
+    <div class="story-grid">
+      <div class="story-copy">
+        <div class="eq-label">Newton cooling ODE</div>
+        <div class="eq eq-a">
+          d<span class="sym-a">T</span>/dt = −h_cool · A_top · (<span class="sym-a">T</span> − T_amb) / (ρCp · V_eff)
+          <br><span class="sym-dim">V_eff = V_liq + V_equiv_coffee</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:14px">Dynamic viscosity (water)</div>
+        <div class="eq">
+          μ(<span class="sym-a">T</span>) = μ_ref · μ_rel(<span class="sym-a">T</span>) / μ_rel(T_ref)
+          <br><span class="sym-dim">μ_rel(T): empirical fit to the user-provided viscosity curve</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:14px">Effect on flow rate</div>
+        <div class="eq eq-b">
+          Q ∝ k / μ(<span class="sym-a">T</span>)
+          <br><span class="sym-dim">Lower T → higher μ → slower Q → longer contact time</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:14px">Saturation concentration (Henry-type)</div>
+        <div class="eq eq-p">
+          C_sat(<span class="sym-a">T</span>) = C_sat_ref · exp[α · (<span class="sym-a">T</span> − T_ref)]
+          <br><span class="sym-dim">Higher T → more soluble → faster EY build-up</span>
+        </div>
+        <div class="mini-note">The landing-page view here is not “temperature is good or bad”; it is that temperature changes both throughput and chemistry, and the slow bitter fraction reacts more strongly than the fast bright fraction.</div>
+      </div>
+
+      <div class="story-figure">
+        <div class="chart-stack">
+          <div class="chart-head">
+            <div>
+              <div class="chart-title">Generated Output — Thermal Coupling</div>
+              <div class="chart-sub">This figure is exported from the simulator and compares slurry temperature, outflow response, cup TDS, and cup EY under cool, baseline, and hot brewing temperatures.</div>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <img class="figure-img" src="v60_thermal.png" alt="V60 thermal coupling output figure">
+          </div>
+          <div class="figure-note">The present baseline outputs are approximately 14.6% EY at 83°C, 16.4% at 93°C, and 17.7% at 99°C, with hotter water increasing slow-soluble extraction more strongly.</div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ══ 05  PERMEABILITY DECAY ══════════════════════════════════════ -->
+  <div class="section">
+    <div class="section-label">05 &nbsp; Hydraulic Regime</div>
+    <div class="panel section-panel">
+    <div class="story-grid alt">
+      <div class="story-figure">
+        <div class="chart-stack">
+          <div class="chart-head">
+            <div>
+              <div class="chart-title">Generated Output — Flow Diagnostics</div>
+              <div class="chart-sub">This simulator output collects water head, flow decomposition, cumulative volume balance, bypass activation, permeability retention, and bed saturation in one diagnostics panel.</div>
+            </div>
+          </div>
+          <div class="canvas-wrap">
+            <img class="figure-img" src="v60_simulation.png" alt="V60 flow diagnostics output figure">
+          </div>
+          <div class="figure-note">In the current medium baseline, the bed retains roughly 42% of its initial permeability by the end of the brew, and the average bypass fraction is around 1.7%.</div>
+        </div>
+      </div>
+
+      <div class="story-copy">
+        <div class="eq-label">Capillary pressure cutoff</div>
+        <div class="eq eq-p">
+          Q → Q · σ_cap(<span class="sym-c">h</span>)
+          <br>σ_cap = sigmoid[(<span class="sym-c">h</span> − h_cap) / δ]
+          <br><span class="sym-dim">h_cap = 3 mm,  δ = 0.5 mm</span>
+          <br><span class="sym-dim">drip-filter transition: h &lt; h_cap → Q → 0</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:16px">Bloom saturation — cubic Hermite</div>
+        <div class="eq">
+          sat = V_poured / V_absorb(dose)
+          <br>smooth_step(sat, 0, 1) = 3s² − 2s³   [C¹]
+          <br><span class="sym-dim">V_absorb_dry  = 0.5 mL/g   (CO₂-corrected)</span>
+          <br><span class="sym-dim">V_absorb_full = 1.64 mL/g   (medium roast)</span>
+        </div>
+
+        <div class="eq-label" style="margin-top:16px">Pressure-head closure</div>
+        <div class="eq eq-b">
+          h_eff = raw_head · sigmoid(raw_head / ε)
+          <br><span class="sym-dim">smooth positive-part closure near the capillary / gas threshold</span>
+          <br><span class="sym-dim">prevents numerical chatter at raw_head ≈ 0</span>
+        </div>
+
+        <div style="margin-top:20px;font-family:var(--font-mono);font-size:10px;color:var(--text-dim)">
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">
+            <span>Parameter</span><span>Default value</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>k₀</span><span style="color:var(--accent)">6×10⁻¹¹ m²</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>β (fines)</span><span style="color:var(--accent4)">3000 m⁻³</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>h_cap</span><span style="color:var(--accent3)">3 mm</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>h_bed</span><span style="color:var(--text)">48 mm</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0"><span>h_gas₀ (medium)</span><span style="color:var(--accent2)">1 mm</span></div>
+        </div>
+        <div class="mini-note">This is the section that explains why fine grind does not just extract more. Once the bed compacts and permeability collapses, the whole brew migrates into a different hydraulic regime.</div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ══ 06  ROAST PROFILES ══════════════════════════════════════════ -->
+  <div class="section">
+    <div class="section-label">06 &nbsp; Roast Profiles</div>
+    <div class="panel section-panel" style="margin-bottom:16px">
+      <div class="chart-head">
+        <div>
+          <div class="chart-title">Generated Output — Grind Outcome Map</div>
+          <div class="chart-sub">This figure compares coarse, medium, and fine grind directly in terms of water head, outflow, cup TDS trajectory, and final cup position against the target window.</div>
+        </div>
+      </div>
+      <div class="canvas-wrap" style="margin-top:14px">
+        <img class="figure-img" src="v60_grind.png" alt="V60 grind outcome output figure">
+      </div>
+    </div>
+    <div class="g3">
+      <div class="panel panel-sm">
+        <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent4);margin-bottom:12px;font-weight:600">LIGHT</div>
+        <div style="font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">max_EY</span><span style="color:var(--text-hi)">22 %</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">Eₐ_slow</span><span style="color:var(--text-hi)">50 kJ/mol</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">fast_fraction</span><span style="color:var(--accent4)">0.45</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">absorb_full</span><span style="color:var(--text-hi)">1.2 mL/g</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">h_gas₀</span><span style="color:var(--accent3)">9 mm</span></div>
+        </div>
+        <div style="margin-top:12px;font-family:var(--font-mono);font-size:9px;color:var(--text-dim);line-height:1.6;border-top:1px solid var(--border);padding-top:10px">
+          Dense cell walls → high CO₂ retention → strong back-pressure, limited solute accessibility
+        </div>
+      </div>
+      <div class="panel panel-sm">
+        <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent);margin-bottom:12px;font-weight:600">MEDIUM</div>
+        <div style="font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">max_EY</span><span style="color:var(--text-hi)">30 %</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">Eₐ_slow</span><span style="color:var(--text-hi)">45 kJ/mol</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">fast_fraction</span><span style="color:var(--accent)">0.35</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">absorb_full</span><span style="color:var(--text-hi)">1.64 mL/g</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">h_gas₀</span><span style="color:var(--accent3)">1 mm</span></div>
+        </div>
+        <div style="margin-top:12px;font-family:var(--font-mono);font-size:9px;color:var(--text-dim);line-height:1.6;border-top:1px solid var(--border);padding-top:10px">
+          Engineering baseline for a slightly degassed everyday medium roast; not a universal fresh-bean reference.
+        </div>
+      </div>
+      <div class="panel panel-sm">
+        <div style="font-family:var(--font-mono);font-size:10px;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent2);margin-bottom:12px;font-weight:600">DARK</div>
+        <div style="font-family:var(--font-mono);font-size:11px;display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">max_EY</span><span style="color:var(--text-hi)">30 %</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">Eₐ_slow</span><span style="color:var(--text-hi)">38 kJ/mol</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">fast_fraction</span><span style="color:var(--accent2)">0.25</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">absorb_full</span><span style="color:var(--text-hi)">1.7 mL/g</span></div>
+          <div style="display:flex;justify-content:space-between"><span style="color:var(--text-dim)">h_gas₀</span><span style="color:var(--accent3)">4 mm</span></div>
+        </div>
+        <div style="margin-top:12px;font-family:var(--font-mono);font-size:9px;color:var(--text-dim);line-height:1.6;border-top:1px solid var(--border);padding-top:10px">
+          Ruptured cell walls → low CO₂, porous matrix. Bitter compounds dominate with lower Eₐ.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Technical Highlights</div>
+    <div class="panel section-panel">
+      <div class="showcase-shell">
+        <div class="showcase-copy">
+          <div class="eyebrow">Model Surface</div>
+          <div class="showcase-title" style="font-size:32px">The repo exposes a reduced-order but fully coupled brew model, not a static recipe calculator.</div>
+          <div class="showcase-text">The technical point of this project is that the brew is treated as a stateful system. Hydraulic resistance, thermal loss, accessibility, and cup-side dilution all evolve together, and the generated figures are simply different slices through that same state trajectory.</div>
+          <div class="showcase-list">
+            <div class="showcase-item">
+              <strong>State Vector</strong>
+              `h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T`
+            </div>
+            <div class="showcase-item">
+              <strong>Primary Outputs</strong>
+              Brew time, drain time, bypass ratio, permeability retention, TDS, in-cup EY, dissolved EY, D10 diagnostics, and fast/slow flavor balance.
+            </div>
+            <div class="showcase-item">
+              <strong>Physical Closures</strong>
+              Darcy flow, capillary cutoff, wet-bed capillary boost, fines clogging, Newton cooling, roast-dependent chemistry, and Noyes-Whitney-like transport.
+            </div>
+          </div>
+        </div>
+        <div class="story-copy">
+          <div class="eq-label">Core State</div>
+          <div class="eq">state = [h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T]</div>
+          <div class="eq-label" style="margin-top:14px">Hydraulic Output Layer</div>
+          <div class="eq eq-b">
+            Q_ext, Q_bp, k_eff, sat, h, brew_time, drain_time
+          </div>
+          <div class="eq-label" style="margin-top:14px">Cup Output Layer</div>
+          <div class="eq eq-p">
+            C_out, TDS, EY_cup, EY_dissolved, EY_fast, EY_slow
+          </div>
+          <div class="mini-note">Project scope, installation, and reproducibility are intentionally kept in the README. This page is for surfacing the model and the figures it produces.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- .page -->
+
+<script>
+/* ── THEME ── */
+function toggleTheme(){
+  const h=document.documentElement,n=h.dataset.theme==='dark'?'light':'dark';
+  h.dataset.theme=n; document.getElementById('tlabel').textContent=n.toUpperCase();
+  try{localStorage.setItem('theme',n)}catch(e){}
+}
+(function(){try{const s=localStorage.getItem('theme');if(s){document.documentElement.dataset.theme=s;document.getElementById('tlabel').textContent=s.toUpperCase()}}catch(e){}})();
+
+/* ── V60 SVG water level animation ── */
+function animateV60(){
+  let phase=0;
+  const waterPoly=document.getElementById('waterPoly');
+  const waterSurface=document.getElementById('waterSurface');
+  const bubbles=document.querySelectorAll('.bubble');
+
+  if(!waterPoly)return;
+
+  // animate bubbles
+  bubbles.forEach((b,i)=>{
+    b.style.animation=`bubble-rise ${1.5+i*0.4}s ${i*0.3}s ease-in infinite`;
+  });
+
+  let t=0;
+  setInterval(()=>{
+    t+=0.4;
+    // Water level oscillates between full and draining
+    const progress=((t%60)/60); // 0→1 cycle
+    // h from high (full pour) to low (draining)
+    const h_norm=Math.max(0, 0.7*(1 - Math.max(0, progress-0.3)/0.7));
+    // Water polygon: cone from top to bed level (y=288)
+    // At max fill: water top at y≈60 → spans wide
+    // cone: top(250,30), right slope: x=70+(430-70)*((y-30)/(340-30)), left: mirror
+    // New cone geometry: top rim y=38, bed top y=295
+    // x_left(y) = 65 + 157*(y-38)/307, x_right(y) = 435 - 157*(y-38)/307
+    const y_surface=68 + (275-68)*(1-h_norm);  // oscillates between y=68 (full) and y=275 (low)
+    const xl=65 + 157*(y_surface-38)/307;
+    const xr=435 - 157*(y_surface-38)/307;
+    waterPoly.setAttribute('points', `${xl},${y_surface} ${xr},${y_surface} 304,295 196,295`);
+    waterSurface.setAttribute('x1', xl); waterSurface.setAttribute('x2', xr);
+    waterSurface.setAttribute('y1', y_surface); waterSurface.setAttribute('y2', y_surface);
+  }, 80);
+}
+
+window.addEventListener('load', animateV60);
+</script>
+</body>
+</html>
