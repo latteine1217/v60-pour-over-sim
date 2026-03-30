@@ -1,10 +1,10 @@
 """
 V60 手沖咖啡 ODE 模擬引擎
 ==========================
-此模組為核心數值積分引擎，實作 V60 8D ODE 系統的求解與結果後處理。
+此模組為核心數值積分引擎，實作 V60 動態 ODE 系統的求解與結果後處理。
 
 核心狀態向量：
-    state = [h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T]
+    state = [h, V_out, V_bed, V_poured, sat, extraction axial bins..., T, T_dripper, chi_struct, xi_pref]
 
 主要函式：
     simulate_brew()  — 數值積分 ODE，回傳完整時序結果 dict
@@ -21,44 +21,107 @@ from .params import V60Params, PourProtocol, RHO, G, H_MIN, R_GAS
 def simulate_brew(
     params: V60Params,
     protocol: PourProtocol,
-    t_end: float = 300.0,
+    t_end: float = 180.0,
     n_eval: int = 3000,
+    rtol: float = 1e-6,
+    atol: float = 1e-8,
+    max_step: float = 0.5,
 ) -> dict:
     """
-    數值積分 V60 9D ODE 系統（v7 多組分萃取 + 動態潤濕）。
+    數值積分 V60 動態 ODE 系統（bin-resolved 萃取 + 軸向梯度 + 動態潤濕 + 濕床結構記憶 + 濾杯熱節點）。
 
-    What: 狀態向量 [h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T]
-          h        → 水位 [m]
-          V_out    → 累積出液量 [m³]，動態計算 k_eff
-          V_poured → 累積注水量 [m³]，計算吸水飽和度 sat
-          sat      → 粉床實際潤濕/吸水飽和度 [-]
-          C_fast   → Fast 組分粉層濃度 [g/L]（酸/甜）
-          M_fast   → Fast 組分剩餘固相質量 [g]
-          C_slow   → Slow 組分粉層濃度 [g/L]（苦/澀）
-          M_slow   → Slow 組分剩餘固相質量 [g]
-          T        → 水溫 [K]，驅動 μ(T)、k_ext_i(T)、C_sat_i(T)
+    What:
+          基礎狀態固定為 [h, V_out, V_bed, V_poured, sat]；
+          measured PSD bins 啟用時，接著是每個 axial layer × bin 的：
+          [C_fast_ij, M_fast_ij, C_slow_ij, M_slow_ij]；
+          最後接 [T, T_dripper, chi_struct, xi_pref]。
 
-    Why:  八維狀態讓流體力學、多組分化學萃取、熱力學三者完全耦合。
+    Why:
+          水力學仍是集總床層模型，但萃取端升級為 bin-resolved，
+          讓 measured PSD 的 A_i、L_i、M_i 真正進入 ODE，而不是只作 aggregate closure。
+          軸向上則用少量串接 CSTR 保留「上層先被稀釋、下層決定出液濃度」的梯度，
+          避免把整個粉床濃度硬壓成單一均勻池。
+          `rtol/atol/max_step` 保持預設即可重現既有結果；fitting 可用較鬆設定換取速度。
     """
+    t_bloom_end = protocol.bloom_end_time()
+    n_bins = int(getattr(params, "extraction_bin_count", 1))
+    n_layers = int(getattr(params, "axial_node_count", 1))
+    n_axial = n_layers * n_bins
+    layer_frac = np.asarray(getattr(params, "axial_layer_volume_fraction", np.full(n_layers, 1.0 / max(n_layers, 1))), dtype=float)
+    layer_frac = layer_frac / np.maximum(np.sum(layer_frac), 1e-12)
+    layer_frac_col = layer_frac[:, None]
+    M_fast_0_layers = layer_frac_col * np.asarray(params.M_fast_0_bins, dtype=float)[None, :]
+    M_slow_0_layers = layer_frac_col * np.asarray(params.M_slow_0_bins, dtype=float)[None, :]
+    c_fast_slice = slice(5, 5 + n_axial)
+    m_fast_slice = slice(5 + n_axial, 5 + 2 * n_axial)
+    c_slow_slice = slice(5 + 2 * n_axial, 5 + 3 * n_axial)
+    m_slow_slice = slice(5 + 3 * n_axial, 5 + 4 * n_axial)
+    T_idx = 5 + 4 * n_axial
+    T_dripper_idx = T_idx + 1
+    chi_idx = T_idx + 2
+    pref_idx = T_idx + 3
+
     def rhs(t, state):
-        h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T = state
+        h = float(state[0])
+        V_out = float(state[1])
+        V_bed = float(state[2])
+        V_poured = float(state[3])
+        sat = float(state[4])
+        C_fast_layers = np.maximum(np.asarray(state[c_fast_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
+        M_fast_layers = np.maximum(np.asarray(state[m_fast_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
+        C_slow_layers = np.maximum(np.asarray(state[c_slow_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
+        M_slow_layers = np.maximum(np.asarray(state[m_slow_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
+        T = float(state[T_idx])
+        T_dripper = float(state[T_dripper_idx])
+        chi_struct = float(state[chi_idx])
+        xi_pref = float(state[pref_idx])
         h      = max(h, H_MIN)
         sat    = float(np.clip(sat, 0.0, 1.0))
-        C_fast = max(C_fast, 0.0)
-        M_fast = max(M_fast, 0.0)
-        C_slow = max(C_slow, 0.0)
-        M_slow = max(M_slow, 0.0)
         T      = float(np.clip(T, params.T_amb, params.T_brew + 5.0))
+        T_dripper = float(np.clip(T_dripper, params.T_amb - 5.0, params.T_brew + 5.0))
+        chi_struct = float(np.clip(chi_struct, 0.0, 1.0))
+        xi_pref = float(np.clip(xi_pref, 0.0, 1.0))
+        M_fast = float(np.sum(M_fast_layers))
+        M_slow = float(np.sum(M_slow_layers))
 
-        sat_target = params.saturation(V_poured)
-        k_val   = params.k_eff(V_out, sat, h)   # [修正 8] 溶脹修正需要 sat；壓差壓實需要 h
+        bloom_active = t < t_bloom_end
+        sat_target = params.saturation(V_poured) if bloom_active else 1.0
+        # sat 只追蹤乾粉潤濕前沿；流動方程則在 bloom 後平滑鬆弛到濕床近似。
+        sat_flow = params.flow_saturation(sat, t, t_bloom_end)
+
+        area  = params.area(h)
+        impact = protocol.pour_start_impact(t, bloom_end_s=t_bloom_end, width_s=params.wetbed_impact_tau)
+
+        # 先估計不含 bloom 後濕床重排的基礎滲透率，再用其對應的孔隙流速當代理量。
+        k_base = params.k_eff(
+            V_bed, sat_flow, h,
+            q_in=0.0, u_pore=0.0, t_sec=t, bloom_end_s=None,
+            wetbed_struct_state=chi_struct,
+            pour_impact=impact,
+        )
         psi_val = params.psi_eff(V_out)
 
         Q_in  = protocol.pour_rate(t)
-        Q_ext = params.q_extract(h, k_val, T, t, sat=sat)   # t 傳入修正 [14] CO₂ 背壓
+        Q_ext_base = params.q_extract(h, k_base, T, t, sat=sat_flow)
+        Q_pref_base = params.q_preferential(
+            h, xi_pref, T_K=T, t_sec=t, sat=sat_flow, bloom_end_s=t_bloom_end
+        )
+        phi_eff_now = params.phi_effective(sat_flow, h)
+        Q_bed_base = Q_ext_base + Q_pref_base
+        u_proxy = max(Q_bed_base, 0.0) / max(area * phi_eff_now, 1e-12)
+        k_val = params.k_eff(
+            V_bed, sat_flow, h,
+            q_in=Q_in, u_pore=u_proxy, t_sec=t, bloom_end_s=t_bloom_end,
+            wetbed_struct_state=chi_struct,
+            pour_impact=impact,
+        )
+        Q_ext = params.q_extract(h, k_val, T, t, sat=sat_flow)
+        Q_pref = params.q_preferential(
+            h, xi_pref, T_K=T, t_sec=t, sat=sat_flow, bloom_end_s=t_bloom_end
+        )
+        Q_bed = Q_ext + Q_pref
         Q_bp  = params.q_bypass(h, psi_val, T)
-        Q_out = Q_ext + Q_bp
-        area  = params.area(h)
+        Q_out = Q_bed + Q_bp
 
         # 修正 [16] 動態潤濕：注水填充 + 毛細潤濕並行
         # d sat / dt = hydraulic_fill + capillary_fill
@@ -68,14 +131,15 @@ def simulate_brew(
         #       模型視為乾粉浸濕階段已結束，後續不再額外啟用毛細浸潤項。
         sat_gap = max(0.0, sat_target - sat)
         V_absorb = max(params.V_absorb, 1e-12)
-        dsat_hyd = (Q_in / V_absorb) * sat_gap
+        dsat_hyd = (Q_in / V_absorb) * sat_gap if bloom_active else 0.0
         retained_liquid = max(V_poured - V_out, 0.0)
-        dry_wetting_active = float(V_poured < params._V_full)
+        dry_wetting_active = float(bloom_active and (V_poured < params._V_full))
         cap_gate = np.clip(retained_liquid / max(params._V_full, 1e-12), 0.0, 1.0)
         dsat_cap = dry_wetting_active * cap_gate * sat_gap / params.tau_cap_T(T)
         dsat = dsat_hyd + dsat_cap
 
-        Q_in_free = Q_in * sat
+        # 只有 bloom 的乾粉潤濕期，注水才會被 sat 節流；之後視為已浸濕床層。
+        Q_in_free = Q_in * sat_flow
         dh = (Q_in_free - Q_out) / area
         if h <= H_MIN and dh < 0:
             dh = 0.0
@@ -85,48 +149,49 @@ def simulate_brew(
         # β=1: 線性（原模型）；β>1: 超線性，末期 C_eff 更快趨零（細胞壁困住深層溶質）
         # 等效於：速率 ∝ k_ext × M^β / M₀^β × (C_sat - C)，β=1.5 時更快收斂
         β = params.beta_access
-        if params.M_fast_0 > 0 and M_fast > 0:
-            acc_fast = (M_fast / params.M_fast_0) ** β
-            C_eff_fast = params.C_sat_fast_T(T) * acc_fast
-        else:
-            C_eff_fast = 0.0
         # 修正 [15] 流速依賴傳質係數（邊界層 Sh 效應）
         # flow_factor = k_diff_ratio + (1-k_diff_ratio) × Q_ext/(Q_ext+Q_half)
         # 靜置(Q→0): flow_factor→k_diff_ratio；流動(Q>>Q_half): flow_factor→1
         _kr = params.k_diff_ratio
-        flow_factor = _kr + (1.0 - _kr) * Q_ext / (Q_ext + params.Q_half)
+        flow_factor = _kr + (1.0 - _kr) * Q_bed / (Q_bed + params.Q_half)
+        k_ext_fast_bins = params.k_ext_fast_bins_T(T, t_sec=t)
+        k_ext_slow_bins = params.k_ext_slow_bins_T(T, t_sec=t)
+        V_liq_conc_layers = np.maximum(
+            params.V_liquid * layer_frac_col,
+            params.V_liquid * 0.05 / max(n_layers, 1),
+        )
 
-        dis_fast = params.k_ext_fast_T(T, t) * flow_factor * max(0.0, C_eff_fast - C_fast)
-
-        if params.M_slow_0 > 0 and M_slow > 0:
-            acc_slow = (M_slow / params.M_slow_0) ** β
-            C_eff_slow = params.C_sat_slow_T(T) * acc_slow
+        if params.M_fast_0 > 0:
+            acc_fast_layers = np.where(
+                M_fast_0_layers > 1e-12,
+                (M_fast_layers / np.maximum(M_fast_0_layers, 1e-12)) ** β,
+                0.0,
+            )
+            C_eff_fast_layers = params.C_sat_fast_T(T) * acc_fast_layers
         else:
-            C_eff_slow = 0.0
-        dis_slow = params.k_ext_slow_T(T, t) * flow_factor * max(0.0, C_eff_slow - C_slow)
+            C_eff_fast_layers = np.zeros_like(C_fast_layers)
+        dis_fast_layers = k_ext_fast_bins[None, :] * flow_factor * np.maximum(C_eff_fast_layers - C_fast_layers, 0.0)
 
-        # 粉床孔隙 CSTR 濃度更新（修正 [5][7][11] 組合）
-        # dC/dt = (dis - Q_ext × C) / V_liquid
-        # 物理解釋：Q_ext 是「真正穿過粉層」的 Darcy 流速（≈1-3 mL/s），
-        #           NOT 注水速率 Q_in（≈7.5 mL/s）。兩者差 4-7 倍，代表大部分注水
-        #           先積在自由液面（產生靜水壓），再靠 Darcy 滲透進粉床孔隙。
-        # 多段注水效益的捕捉機制：
-        #   注水間隙 → Q_ext 排走高濃縮液 → C 下降
-        #   下一段注水 → h 升 → Q_ext 增大 → 驅動力(C_eff-C)大 → 更多溶解
-        # 此 CSTR 模型忽略粉床縱向濃度梯度（PFR 效應），稍低估多段注水效益；
-        # 完整修正需要 PDE 空間模型（未來工作）。
-        #
-        # NOTE（動態稀釋體積）：使用靜態 V_liquid（滿載孔隙量）而非瞬時 V_liq_t，
-        # 是刻意的數值穩定性選擇。若使用小分母 V_liq_t（初期 ≈1mL），
-        # 萃取速率未同步按 sat 縮放時，C_fast 在 t<2s 即衝至 220 g/L，
-        # 導致 M_fast 快速耗盡（EY>28%）。正確修正需同步縮放 dis_fast × sat，
-        # 等效為「未飽和粉床的可萃取固態溶質比例也等比縮小」，
-        # 在 0D 集總模型中引入高非線性耦合。留作未來 PDE 擴展時一併修正。
-        V_liq_conc = params.V_liquid
-        dC_fast = (dis_fast - Q_ext * C_fast) / V_liq_conc
-        dM_fast = -dis_fast * 1e3
-        dC_slow = (dis_slow - Q_ext * C_slow) / V_liq_conc
-        dM_slow = -dis_slow * 1e3
+        if params.M_slow_0 > 0:
+            acc_slow_layers = np.where(
+                M_slow_0_layers > 1e-12,
+                (M_slow_layers / np.maximum(M_slow_0_layers, 1e-12)) ** β,
+                0.0,
+            )
+            C_eff_slow_layers = params.C_sat_slow_T(T) * acc_slow_layers
+        else:
+            C_eff_slow_layers = np.zeros_like(C_slow_layers)
+        dis_slow_layers = k_ext_slow_bins[None, :] * flow_factor * np.maximum(C_eff_slow_layers - C_slow_layers, 0.0)
+
+        # 粉床孔隙串接 CSTR 濃度更新：上層先吃稀釋，下層決定出液濃度。
+        # 上游邊界濃度視為 0（注入液進入粉床前不含咖啡溶質），
+        # 各層之間只由 Q_bed 單向帶走濃度，保留 reduced-order 的局部可推理性。
+        C_fast_upstream = np.vstack([np.zeros((1, n_bins), dtype=float), C_fast_layers[:-1]])
+        C_slow_upstream = np.vstack([np.zeros((1, n_bins), dtype=float), C_slow_layers[:-1]])
+        dC_fast_layers = (dis_fast_layers + Q_bed * (C_fast_upstream - C_fast_layers)) / V_liq_conc_layers
+        dM_fast_layers = -dis_fast_layers * 1e3
+        dC_slow_layers = (dis_slow_layers + Q_bed * (C_slow_upstream - C_slow_layers)) / V_liq_conc_layers
+        dM_slow_layers = -dis_slow_layers * 1e3
 
         # 瞬時孔隙液體體積（供熱動方程使用）
         V_liq_t = max(params.phi * (np.pi / 3) * params._tan2 * h**3,
@@ -144,24 +209,68 @@ def simulate_brew(
         # 導致第一注完成瞬間分母縮小，引發虛假溫度跳變並低估後段降溫效果。
         # 修正：V_equiv_coffee 無論 sat 為何，始終計入熱動方程分母。
         V_eff_T = V_liq_t + params.V_equiv_coffee
+        exchange_liq_dripper = params.lambda_liquid_dripper * (T - T_dripper)
         dT = (Q_in / V_eff_T) * (params.T_brew - T) \
-             - params.lambda_cool * (T - params.T_amb)
+             - params.lambda_cool * (T - params.T_amb) \
+             - exchange_liq_dripper
 
-        return [dh, Q_out, Q_in, dsat, dC_fast, dM_fast, dC_slow, dM_slow, dT]
+        if params.V_equiv_dripper > 0.0:
+            dT_dripper = (
+                params.lambda_liquid_dripper
+                * (V_eff_T / max(params.V_equiv_dripper, 1e-12))
+                * (T - T_dripper)
+                - params.lambda_dripper_ambient * (T_dripper - params.T_amb)
+            )
+        else:
+            dT_dripper = 0.0
+
+        dchi_struct = params.d_wetbed_struct_dt(
+            chi_struct,
+            q_in=Q_in,
+            h=h,
+            pour_impact=impact,
+            t_sec=t,
+            bloom_end_s=t_bloom_end,
+        )
+        dxi_pref = params.d_preferential_flow_dt(
+            xi_pref,
+            q_in=Q_in,
+            pour_impact=impact,
+            t_sec=t,
+            bloom_end_s=t_bloom_end,
+        )
+
+        return np.concatenate((
+            np.array([dh, Q_out, Q_bed, Q_in, dsat], dtype=float),
+            dC_fast_layers.reshape(-1),
+            dM_fast_layers.reshape(-1),
+            dC_slow_layers.reshape(-1),
+            dM_slow_layers.reshape(-1),
+            np.array([dT, dT_dripper, dchi_struct, dxi_pref], dtype=float),
+        ))
 
     t_eval = np.linspace(0, t_end, n_eval)
     # 初始熱衝擊溫度
-    V_bloom   = protocol.pours[0][1] * 1e-6
+    V_bloom   = protocol.first_pour_volume_ml() * 1e-6
     m_w_bloom = V_bloom * RHO
     m_coffee  = params.dose_g * 1e-3
     CP_W      = 4180.0
     T_shock   = (m_w_bloom * CP_W * params.T_brew + m_coffee * params.Cp_coffee * params.T_amb) \
                 / (m_w_bloom * CP_W + m_coffee * params.Cp_coffee)
 
+    y0 = np.concatenate((
+        np.array([H_MIN, 0.0, 0.0, 0.0, 0.0], dtype=float),
+        np.zeros(n_axial, dtype=float),
+        M_fast_0_layers.reshape(-1),
+        np.zeros(n_axial, dtype=float),
+        M_slow_0_layers.reshape(-1),
+        np.array([T_shock, params.T_amb, 0.0, 0.0], dtype=float),
+    ))
+
     sol = solve_ivp(
         rhs,
         t_span=(0, t_end),
-        y0=[H_MIN, 0.0, 0.0, 0.0, 0.0, params.M_fast_0, 0.0, params.M_slow_0, T_shock],
+        y0=y0,
         t_eval=t_eval,
         # RK45 + 加密步長（max_step=0.5）
         # 選用 RK45 而非 LSODA/Radau 的理由：
@@ -169,45 +278,118 @@ def simulate_brew(
         # - h_cap 附近 sigmoid 梯度 ~1/(h_cap×0.25)=800 m⁻¹，以 max_step=0.5s 足以解析
         # - 批量靈敏度掃描（225 runs）需要快速非剛性求解器
         method="RK45",
-        rtol=1e-6,
-        atol=1e-8,
-        max_step=0.5,  # 從 1.0 縮短至 0.5，改善 sigmoid 截止區域的數值精度
+        rtol=rtol,
+        atol=atol,
+        max_step=max_step,  # 預設 0.5；fitting 可暫用較粗步長，再以高精度回算 final
     )
 
     t        = sol.t
     h        = np.maximum(sol.y[0], 0.0)
     V_out    = sol.y[1]
-    V_poured = sol.y[2]
-    sat      = np.clip(sol.y[3], 0.0, 1.0)
-    C_fast   = np.maximum(sol.y[4], 0.0)   # [g/L] Fast 組分粉層濃度
-    M_fast   = np.maximum(sol.y[5], 0.0)   # [g]   Fast 組分剩餘固相
-    C_slow   = np.maximum(sol.y[6], 0.0)   # [g/L] Slow 組分粉層濃度
-    M_slow   = np.maximum(sol.y[7], 0.0)   # [g]   Slow 組分剩餘固相
-    T_K      = np.clip(sol.y[8], params.T_amb, params.T_brew + 5.0)  # [K]
+    V_bed    = sol.y[2]
+    V_poured = sol.y[3]
+    sat_state = np.clip(sol.y[4], 0.0, 1.0)
+    sat      = np.where(t < t_bloom_end, sat_state, 1.0)
+    C_fast_layers = np.maximum(sol.y[c_fast_slice], 0.0).reshape(n_layers, n_bins, -1)
+    M_fast_layers = np.maximum(sol.y[m_fast_slice], 0.0).reshape(n_layers, n_bins, -1)
+    C_slow_layers = np.maximum(sol.y[c_slow_slice], 0.0).reshape(n_layers, n_bins, -1)
+    M_slow_layers = np.maximum(sol.y[m_slow_slice], 0.0).reshape(n_layers, n_bins, -1)
+    C_fast_bins_mean = np.tensordot(layer_frac, C_fast_layers, axes=(0, 0))
+    C_slow_bins_mean = np.tensordot(layer_frac, C_slow_layers, axes=(0, 0))
+    C_fast   = np.sum(C_fast_bins_mean, axis=0)
+    M_fast   = np.sum(M_fast_layers, axis=(0, 1))
+    C_slow   = np.sum(C_slow_bins_mean, axis=0)
+    M_slow   = np.sum(M_slow_layers, axis=(0, 1))
+    C_fast_out = np.sum(C_fast_layers[-1], axis=0)
+    C_slow_out = np.sum(C_slow_layers[-1], axis=0)
+    C_bed_top = np.sum(C_fast_layers[0] + C_slow_layers[0], axis=0)
+    C_bed_bottom = np.sum(C_fast_layers[-1] + C_slow_layers[-1], axis=0)
+    T_K      = np.clip(sol.y[T_idx], params.T_amb, params.T_brew + 5.0)  # [K]
+    T_dripper_K = np.clip(sol.y[T_dripper_idx], params.T_amb - 5.0, params.T_brew + 5.0)
+    chi_struct = np.clip(sol.y[chi_idx], 0.0, 1.0)
+    xi_pref = np.clip(sol.y[pref_idx], 0.0, 1.0)
     M_sol    = M_fast + M_slow             # 向後相容：總剩餘固相
 
     q_in_raw = np.array([protocol.pour_rate(ti) for ti in t])
-    q_in_eff = q_in_raw * sat
+    sat_flow_arr = np.array([params.flow_saturation(float(si), float(ti), t_bloom_end) for si, ti in zip(sat, t)])
+    kr_sat_arr = np.asarray(params.relative_permeability(sat_flow_arr), dtype=float)
+    q_in_eff = q_in_raw * sat_flow_arr
 
-    # 重新計算各流量分量（用於繪圖，帶入衰減後的 k、Ψ 與溫度）
-    k_vals   = np.array([params.k_eff(v, s, hi) for v, s, hi in zip(V_out, sat, h)])
-    psi_vals = params.psi_eff(V_out)
-    q_ext  = params.q_extract(h, k_vals, T_K, sat=sat)
-    q_bp   = params.q_bypass(h, psi_vals, T_K)
-    q_out  = q_ext + q_bp
+    # 重新計算各流量分量（用於繪圖，帶入衰減後的 k、Ψ、濕床 gate 與溫度）
+    impact_arr = np.array([protocol.pour_start_impact(float(ti), bloom_end_s=t_bloom_end, width_s=params.wetbed_impact_tau) for ti in t])
     area_arr = np.maximum(params.area(h), 1e-12)
-    phi_eff_arr = np.array([params.phi_effective(s, hi) for s, hi in zip(sat, h)])
-    u_pore = np.where(q_ext > 1e-12, q_ext / np.maximum(area_arr * phi_eff_arr, 1e-12), 0.0)
+    drive_components = params.bed_drive_components(h, T_K=T_K, t_sec=t, sat=sat_flow_arr)
+    h_threshold_arr = np.asarray(drive_components["h_threshold"], dtype=float)
+    h_threshold_eff_arr = np.asarray(drive_components["h_threshold_eff"], dtype=float)
+    h_cap_wet_arr = np.asarray(drive_components["h_cap_wet"], dtype=float)
+    h_eff_arr = np.asarray(drive_components["h_eff"], dtype=float)
+    phi_eff_seed = np.array([params.phi_effective(sf, hi) for sf, hi in zip(sat_flow_arr, h)])
+    k_base_vals = np.array([
+        params.k_eff(
+            vb, sf, hi,
+            q_in=0.0, u_pore=0.0, t_sec=float(ti), bloom_end_s=None,
+            wetbed_struct_state=chi,
+            pour_impact=imp,
+        )
+        for vb, sf, hi, ti, chi, imp in zip(V_bed, sat_flow_arr, h, t, chi_struct, impact_arr)
+    ])
+    q_ext_seed = np.array([
+        params.q_extract(float(hi), float(kv), float(Ti), t_sec=float(ti), sat=float(sf))
+        for hi, kv, Ti, ti, sf in zip(h, k_base_vals, T_K, t, sat_flow_arr)
+    ])
+    q_pref_seed = np.array([
+        params.q_preferential(float(hi), float(xi), T_K=float(Ti), t_sec=float(ti), sat=float(sf), bloom_end_s=t_bloom_end)
+        for hi, xi, Ti, ti, sf in zip(h, xi_pref, T_K, t, sat_flow_arr)
+    ])
+    q_bed_seed = q_ext_seed + q_pref_seed
+    u_seed = np.where(q_bed_seed > 1e-12, q_bed_seed / np.maximum(area_arr * phi_eff_seed, 1e-12), 0.0)
+    k_vals = np.array([
+        params.k_eff(
+            vb, sf, hi,
+            q_in=qin, u_pore=u, t_sec=float(ti), bloom_end_s=t_bloom_end,
+            wetbed_struct_state=chi,
+            pour_impact=imp,
+        )
+        for vb, sf, hi, qin, u, ti, chi, imp in zip(V_bed, sat_flow_arr, h, q_in_raw, u_seed, t, chi_struct, impact_arr)
+    ])
+    psi_vals = params.psi_eff(V_out)
+    q_ext  = np.array([
+        params.q_extract(float(hi), float(kv), float(Ti), t_sec=float(ti), sat=float(sf))
+        for hi, kv, Ti, ti, sf in zip(h, k_vals, T_K, t, sat_flow_arr)
+    ])
+    q_pref = np.array([
+        params.q_preferential(float(hi), float(xi), T_K=float(Ti), t_sec=float(ti), sat=float(sf), bloom_end_s=t_bloom_end)
+        for hi, xi, Ti, ti, sf in zip(h, xi_pref, T_K, t, sat_flow_arr)
+    ])
+    q_bed = q_ext + q_pref
+    q_bp   = params.q_bypass(h, psi_vals, T_K)
+    q_out  = q_bed + q_bp
+    phi_eff_arr = np.array([params.phi_effective(sf, hi) for sf, hi in zip(sat_flow_arr, h)])
+    u_pore = np.where(q_bed > 1e-12, q_bed / np.maximum(area_arr * phi_eff_arr, 1e-12), 0.0)
     fine_drag = np.abs(u_pore) * np.array([params.mu_water(Ti) for Ti in T_K]) * params.fine_radius()
 
     dt           = np.diff(t, prepend=t[0])
     v_in_ml      = np.cumsum(dt * q_in_raw) * 1e6
     v_in_eff_ml  = np.cumsum(dt * q_in_eff) * 1e6
     v_out_ml     = V_out * 1e6
-    v_extract_ml = np.cumsum(dt * q_ext)  * 1e6
+    v_bed_ml     = V_bed * 1e6
+    v_extract_ml = np.cumsum(dt * q_bed)  * 1e6
 
     _q_out_safe  = np.where(q_out > 1e-12, q_out, 1.0)  # 防止零除（h < h_cap 時 q_out=0）
     bypass_ratio = np.where(q_out > 1e-12, q_bp / _q_out_safe, 0.0)
+    pref_ratio = np.where(q_out > 1e-12, q_pref / _q_out_safe, 0.0)
+    head_gate = np.clip(h_eff_arr / np.maximum(h + h_cap_wet_arr, 1e-12), 0.0, 1.0)
+    bloom_mask = t <= t_bloom_end
+    if np.any(bloom_mask):
+        choke_means = {
+            "sat_flow": float(np.mean(1.0 - sat_flow_arr[bloom_mask])),
+            "kr_sat": float(np.mean(1.0 - kr_sat_arr[bloom_mask])),
+            "h_cap_h_gas": float(np.mean(1.0 - head_gate[bloom_mask])),
+        }
+        dominant_bloom_choke = max(choke_means, key=choke_means.get)
+    else:
+        choke_means = {"sat_flow": 0.0, "kr_sat": 0.0, "h_cap_h_gas": 0.0}
+        dominant_bloom_choke = "n/a"
 
     # ── TDS 後處理（多組分）──────────────────────────────────────────────────
     C_bed = C_fast + C_slow    # 總粉層濃度（用於向後相容 plot_tds/compare_corrections）
@@ -221,11 +403,12 @@ def simulate_brew(
                + C_sat_slow_arr / _ms_safe * M_slow * float(params.M_slow_0 > 0))
 
     # 下壺瞬時濃度（旁路稀釋後）
-    C_out = np.where(q_out > 1e-12, q_ext * C_bed / _q_out_safe, 0.0)
+    C_bed_out = C_fast_out + C_slow_out
+    C_out = np.where(q_out > 1e-12, q_bed * C_bed_out / _q_out_safe, 0.0)
 
     # 累積萃取質量（各組分 + 總計）
-    M_fast_ext_g  = np.cumsum(dt * q_ext * C_fast) * 1e3
-    M_slow_ext_g  = np.cumsum(dt * q_ext * C_slow) * 1e3
+    M_fast_ext_g  = np.cumsum(dt * q_bed * C_fast_out) * 1e3
+    M_slow_ext_g  = np.cumsum(dt * q_bed * C_slow_out) * 1e3
     M_extracted_g = M_fast_ext_g + M_slow_ext_g
 
     # 累積 TDS
@@ -281,6 +464,8 @@ def simulate_brew(
         q_in_mlps    = q_in_raw * 1e6,
         q_in_eff_mlps= q_in_eff * 1e6,
         q_ext_mlps   = q_ext    * 1e6,
+        q_pref_mlps  = q_pref   * 1e6,
+        q_bed_mlps   = q_bed    * 1e6,
         q_bp_mlps    = q_bp     * 1e6,
         q_out_mlps   = q_out    * 1e6,
         k_vals       = k_vals,
@@ -288,15 +473,43 @@ def simulate_brew(
         v_in_ml      = v_in_ml,
         v_in_eff_ml  = v_in_eff_ml,
         v_out_ml     = v_out_ml,
+        v_bed_ml     = v_bed_ml,
         v_extract_ml = v_extract_ml,
         bypass_ratio = bypass_ratio,
+        pref_ratio   = pref_ratio,
         sat          = sat,
+        sat_flow     = sat_flow_arr,
+        kr_sat       = kr_sat_arr,
+        head_gate    = head_gate,
+        h_gas_mm     = np.asarray(params.h_gas(t), dtype=float) * 1e3,
+        h_threshold_mm = h_threshold_arr * 1e3,
+        h_threshold_eff_mm = h_threshold_eff_arr * 1e3,
+        h_cap_wet_mm = h_cap_wet_arr * 1e3,
+        h_eff_mm     = h_eff_arr * 1e3,
+        bloom_end_s  = float(t_bloom_end),
+        bloom_choke_means = choke_means,
+        dominant_bloom_choke = dominant_bloom_choke,
+        wetbed_struct= chi_struct,
+        pref_flow_state = xi_pref,
+        extraction_bin_count = n_bins,
+        axial_node_count = n_layers,
+        C_fast_bins_gl = C_fast_bins_mean,
+        C_slow_bins_gl = C_slow_bins_mean,
+        C_fast_layers_gl = C_fast_layers,
+        C_slow_layers_gl = C_slow_layers,
+        M_fast_bins_g = np.sum(M_fast_layers, axis=0),
+        M_slow_bins_g = np.sum(M_slow_layers, axis=0),
+        M_fast_layers_g = M_fast_layers,
+        M_slow_layers_g = M_slow_layers,
         brew_time    = brew_time,
         drain_time   = drain_time,
         # TDS + 固相耗盡（v7 多組分）
         C_bed_gl         = C_bed,
         C_fast_gl        = C_fast,
         C_slow_gl        = C_slow,
+        C_bed_top_gl     = C_bed_top,
+        C_bed_bottom_gl  = C_bed_bottom,
+        C_out_bed_gl     = C_bed_out,
         C_sat_eff_gl     = C_sat_eff,
         C_out_gl         = C_out,
         M_sol_g          = M_sol,
@@ -315,6 +528,9 @@ def simulate_brew(
         # 熱力學（修正 [6]）
         T_K              = T_K,
         T_C              = T_K - 273.15,
+        T_dripper_K      = T_dripper_K,
+        T_dripper_C      = T_dripper_K - 273.15,
+        lambda_server_ambient = float(getattr(params, "lambda_server_ambient", 0.0)),
     )
 
 
@@ -340,6 +556,9 @@ def print_summary(results: dict, label: str = "") -> None:
     if v_out > 0:
         print(f"    ├ 萃取液     : {v_ext:.1f} mL  ({v_ext/v_out*100:.1f}%)")
         print(f"    └ 旁路液     : {v_bp:.1f} mL  ({v_bp/v_out*100:.1f}%)")
+    if "q_pref_mlps" in results:
+        pref_share = float(np.mean(results.get("pref_ratio", np.zeros_like(results["q_out_mlps"])))) * 100.0
+        print(f"  平均快路徑占比 : {pref_share:.1f}%")
     print(f"  峰值水位       : {results['h_mm'].max():.1f} mm")
     print(f"  峰值出水速度   : {results['q_out_mlps'].max():.2f} mL/s")
     k0  = results["k_vals"][0]

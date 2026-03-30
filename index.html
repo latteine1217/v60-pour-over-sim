@@ -275,8 +275,9 @@ canvas{display:block;width:100%;height:auto}
       <div class="header-tag">Technical Reference · Physics Simulation</div>
       <h1>V60 Pour-Over<br>Physics Engine</h1>
       <p class="header-sub">
-        A landing page for the current simulator: pressure-driven flow, extraction chemistry,
-        bypass, and thermal coupling rendered as generated figures instead of hand-drawn placeholders.
+        The current best model is calibrated against a real Kinu 29 brew with measured PSD,
+        split throat/deposition clogging, and bin-resolved extraction. The page now distinguishes
+        calibrated fit diagnostics from broader regime sweeps.
       </p>
       <div class="header-meta">
         <span class="chip chip-c">Darcy / Kozeny-Carman</span>
@@ -309,25 +310,25 @@ canvas{display:block;width:100%;height:auto}
       </div>
     </div>
     <div class="hero-summary">
-      <div class="hero-kicker">Current Baseline</div>
-      <div class="hero-lead">Medium grind, 93°C, generated outputs wired straight into the page.</div>
-      <div class="hero-note">This reference currently behaves like a slightly under-extracted everyday brew: realistic flow diagnostics, realistic bypass, but a conservative cup-side EY.</div>
+      <div class="hero-kicker">Current Best Fit</div>
+      <div class="hero-lead">Kinu 29, light roast, 20 g, measured PSD, calibrated against real V_in(t) / V_out(t).</div>
+      <div class="hero-note">This is the current reference model: measured D10, split clogging, bin-resolved extraction, and a two-node thermal model with ceramic dripper heat capacity.</div>
       <div class="hero-grid">
         <div class="hero-cell">
-          <div class="hero-label">Cup TDS</div>
-          <div class="hero-value">1.11%</div>
+          <div class="hero-label">Measured D10</div>
+          <div class="hero-value">374 μm</div>
         </div>
         <div class="hero-cell">
-          <div class="hero-label">Cup EY</div>
-          <div class="hero-value">16.4%</div>
+          <div class="hero-label">V RMSE</div>
+          <div class="hero-value">14.5 mL</div>
         </div>
         <div class="hero-cell">
-          <div class="hero-label">Avg bypass</div>
-          <div class="hero-value">1.7%</div>
+          <div class="hero-label">q RMSE</div>
+          <div class="hero-value">1.26 mL/s</div>
         </div>
         <div class="hero-cell">
-          <div class="hero-label">LRR</div>
-          <div class="hero-value">2.23</div>
+          <div class="hero-label">Cup ΔT</div>
+          <div class="hero-value">+3.24°C</div>
         </div>
       </div>
     </div>
@@ -340,28 +341,28 @@ canvas{display:block;width:100%;height:auto}
         <div class="showcase-copy">
           <div class="eyebrow">Why This Repo Exists</div>
           <div class="showcase-title">A pour-over simulator that treats flow, temperature, and extraction as one coupled physical system.</div>
-          <div class="showcase-text">Most coffee tools stop at recipe calculators or static brew ratios. This project instead tracks the bed as a changing porous medium: water head builds and collapses, permeability decays, bypass opens late, temperature shifts both viscosity and extraction, and the final cup is read from generated outputs.</div>
+          <div class="showcase-text">Most coffee tools stop at recipe calculators or static brew ratios. This project instead tracks the bed as a changing porous medium and now ties that model back to measurement: real-time poured volume, drained volume, measured PSD, ceramic dripper heat capacity, and final cup temperature all constrain the same state trajectory.</div>
           <div class="showcase-list">
             <div class="showcase-item">
-              <strong>Flow First</strong>
-              Water level, bypass, permeability loss, and saturation are treated as first-class outputs, not hidden assumptions.
+              <strong>Measured PSD</strong>
+              The grinder is no longer represented by an idealized fractal PSD. Kinu 29 measured bins now drive D10, fines indicators, surface area, shell accessibility, and diffusion path.
             </div>
             <div class="showcase-item">
-              <strong>Extraction Split</strong>
-              The cup-side result is decomposed into fast and slow soluble pools instead of one opaque concentration curve.
+              <strong>Split Clogging</strong>
+              Bed resistance now separates early throat blocking from later deposition, so `k_beta` is no longer one opaque lumped decay coefficient.
             </div>
             <div class="showcase-item">
-              <strong>Comparable Regimes</strong>
-              Grind and temperature comparisons are generated from the same model, so the figures can be read as a coherent family.
+              <strong>Bin-Resolved Extraction</strong>
+              Each PSD bin carries its own `A_i`, `L_i`, `M_i`, and dissolved concentration, then recombines into the cup-side fast/slow output.
             </div>
           </div>
           <div class="quick-code"><code>uv run python -m pour_over</code></div>
         </div>
         <div class="story-figure">
           <div class="canvas-wrap">
-            <img class="figure-img" src="v60_grind.png" alt="V60 grind showcase figure">
+            <img class="figure-img" src="data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png" alt="Calibrated Kinu 29 flow fit with wet-bed structure">
           </div>
-          <div class="figure-note">The lead figure is the grind outcome map: dynamic head, outflow, cup TDS trajectory, and the final cup position against the target window.</div>
+          <div class="figure-note">The lead figure is now the calibrated flow-fit panel: measured poured volume, measured drained volume, interval outflow rate, residuals, and the current hydraulic fit for the Kinu 29 light-roast brew, including the post-bloom wet-bed structure state.</div>
         </div>
       </div>
     </div>
@@ -515,7 +516,7 @@ canvas{display:block;width:100%;height:auto}
       <div class="story-copy">
         <div class="eyebrow">Hydraulic Mechanism</div>
         <div class="showcase-title" style="font-size:33px">The brew is controlled by pressure head, bed resistance, and late-opening bypass.</div>
-        <div class="showcase-text">This section is the hydraulic backbone of the model. The state does not assume one fixed flow path: water can go through the bed, be blocked by capillary and gas thresholds, or divert into wall-channel bypass once free-water head becomes large enough.</div>
+        <div class="showcase-text">This section is the hydraulic backbone of the model. The state does not assume one fixed flow path: water can go through the bed, be blocked by capillary and gas thresholds, or divert into wall-channel bypass once free-water head becomes large enough. The bed-resistance term is now explicitly split into early throat clogging and later deposition.</div>
         <div class="signal-grid">
           <div class="signal-card">
             <strong>Drive</strong>
@@ -540,9 +541,10 @@ canvas{display:block;width:100%;height:auto}
           <br><span class="sym-dim">h_eff = h − h_cap − h_gas(t) + h_cap,wet</span>
         </div>
 
-        <div class="eq-label" style="margin-top:16px">Fine migration clogging</div>
+        <div class="eq-label" style="margin-top:16px">Split fines clogging</div>
         <div class="eq eq-b">
-          <span class="sym-b">k_eff</span>(<span class="sym-c">V_out</span>) = k₀ / (1 + β · <span class="sym-c">V_out</span>)
+          <span class="sym-b">k_eff</span> = k₀ / [ (1 + A_throat · (1 − e<sup>−V_out/V_char</sup>)) · (1 + β_dep · V_out) ]
+          <br><span class="sym-dim">early throat blocking saturates; later deposition keeps accumulating</span>
         </div>
 
         <div class="eq-label" style="margin-top:16px">CO₂ back-pressure decay</div>
@@ -574,25 +576,24 @@ canvas{display:block;width:100%;height:auto}
     <div class="panel section-panel">
     <div class="story-grid alt">
       <div class="story-copy">
-        <div class="eq-label">Shrinking-core accessibility (bed pore)</div>
+        <div class="eq-label">Shrinking-core accessibility (per bin)</div>
         <div class="eq">
-          C_eff = C_sat(<span class="sym-a">T</span>) · (<span class="sym-c">M</span> / M₀)<sup>β</sup>,  β = 1.5
+          C_eff,i = C_sat(<span class="sym-a">T</span>) · (<span class="sym-c">M</span><sub>i</sub> / M₀,<sub>i</sub>)<sup>β</sup>,  β = 1.5
         </div>
 
-        <div class="eq-label" style="margin-top:14px">Noyes-Whitney transport rate</div>
+        <div class="eq-label" style="margin-top:14px">Bin-resolved Noyes-Whitney transport</div>
         <div class="eq eq-b">
-          k_ext(<span class="sym-a">T</span>) = η · A_eff · D(<span class="sym-a">T</span>) / L_eff · exp(−<span class="sym-b">Eₐ</span> / R<span class="sym-a">T</span>)
+          k_ext,i(<span class="sym-a">T</span>) = η · A_i · D(<span class="sym-a">T</span>) / L_i · exp(−<span class="sym-b">Eₐ</span> / R<span class="sym-a">T</span>)
         </div>
 
-        <div class="eq-label" style="margin-top:14px">Bed concentration ODE — CSTR model</div>
+        <div class="eq-label" style="margin-top:14px">Bed concentration ODE — bin-resolved CSTR</div>
         <div class="eq eq-p">
-          d<span class="sym-p">C</span>/dt = k_ext · (C_eff − <span class="sym-p">C</span>) · Q_ext / V_liq
-          <br>　　 − <span class="sym-p">C</span> · Q_ext / V_liq
+          d<span class="sym-p">C</span><sub>i</sub>/dt = dis<sub>i</sub> / V_liq − <span class="sym-p">C</span><sub>i</sub> · Q_ext / V_liq
         </div>
 
         <div class="eq-label" style="margin-top:14px">Solid-phase depletion</div>
         <div class="eq">
-          d<span class="sym-c">M</span>/dt = −k_ext · (C_eff − <span class="sym-p">C</span>) · V_liq · f(<span class="sym-p">C</span>)
+          d<span class="sym-c">M</span><sub>i</sub>/dt = −dis<sub>i</sub>
         </div>
 
         <!-- Activation energy comparison -->
@@ -639,13 +640,13 @@ canvas{display:block;width:100%;height:auto}
           <div class="chart-head">
             <div>
               <div class="chart-title">Generated Output — Extraction Quality</div>
-              <div class="chart-sub">This figure now comes directly from the simulation output. It shows bed concentration, outflow concentration, cup TDS, and the split between dissolved EY and in-cup EY in one place.</div>
+              <div class="chart-sub">This figure now shows the calibrated 180 s Kinu 29 extraction trajectory, so the chemistry view matches the same measured-PSD and split-clogging fit used elsewhere on the page.</div>
             </div>
           </div>
           <div class="canvas-wrap">
-            <img class="figure-img" src="v60_tds.png" alt="V60 extraction quality output figure">
+            <img class="figure-img" src="data/kinu29_calibrated_extraction_quality_180s.png" alt="Calibrated Kinu 29 extraction quality output figure">
           </div>
-          <div class="figure-note">Current medium baseline in the generated figure: cup TDS about 1.11%, in-cup EY about 16.4%, and fast compounds contribute roughly 60% of the cup-side extraction.</div>
+          <div class="figure-note">Use this panel as the chemistry-side validation view: top-layer concentration, bottom-layer concentration, outflow concentration, cup TDS, and the split between dissolved EY and in-cup EY now come from the same calibrated 180 s run, not from a separate reference sweep.</div>
           <div class="mini-note">Physically, this is the section where internal availability, transport path length, and cup-side dilution stop being abstract symbols and become a cup-strength trajectory.</div>
         </div>
       </div>
@@ -660,21 +661,21 @@ canvas{display:block;width:100%;height:auto}
       <div class="story-copy" style="margin-bottom:16px">
         <div class="eyebrow">Model Architecture</div>
         <div class="showcase-title" style="font-size:33px">One state trajectory, multiple technical surfaces.</div>
-        <div class="showcase-text">The simulator is built so that flow, thermal, and extraction outputs are all projections of the same coupled ODE state. This is why the figures on the page can be compared directly: they are not separate calculators stitched together after the fact.</div>
-        <div class="tech-grid">
-          <div class="tech-card">
-            <strong>State Layer</strong>
-            `h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T`
+          <div class="showcase-text">The simulator is built so that flow, thermal, and extraction outputs are all projections of the same coupled ODE state. The difference now is that the extraction block is no longer one pair of lumped pools: the hydraulic state couples to a bin-resolved PSD representation.</div>
+          <div class="tech-grid">
+            <div class="tech-card">
+              <strong>State Layer</strong>
+            `h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct`
+            </div>
+            <div class="tech-card">
+              <strong>Closure Layer</strong>
+            Darcy flow, split clogging, bypass activation, wet-bed capillary head, bin-resolved Noyes-Whitney transport, and two-node thermal coupling.
+            </div>
+            <div class="tech-card">
+              <strong>Output Layer</strong>
+            Brew time, drain time, TDS, in-cup EY, dissolved EY, measured D10 diagnostics, and fast/slow cup balance.
+            </div>
           </div>
-          <div class="tech-card">
-            <strong>Closure Layer</strong>
-            Darcy flow, bypass activation, wet-bed capillary head, roast-dependent chemistry, and Newton cooling.
-          </div>
-          <div class="tech-card">
-            <strong>Output Layer</strong>
-            Brew time, drain time, TDS, in-cup EY, dissolved EY, D10 diagnostics, and fast/slow flavor balance.
-          </div>
-        </div>
       </div>
     <div class="panel" style="padding:28px;background:var(--surface2);border:1px solid var(--border)">
       <svg viewBox="0 0 1060 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block">
@@ -831,10 +832,10 @@ canvas{display:block;width:100%;height:auto}
     <div class="panel section-panel">
     <div class="story-grid">
       <div class="story-copy">
-        <div class="eq-label">Newton cooling ODE</div>
-        <div class="eq eq-a">
-          d<span class="sym-a">T</span>/dt = −h_cool · A_top · (<span class="sym-a">T</span> − T_amb) / (ρCp · V_eff)
-          <br><span class="sym-dim">V_eff = V_liq + V_equiv_coffee</span>
+          <div class="eq-label">Two-node thermal model</div>
+          <div class="eq eq-a">
+          d<span class="sym-a">T</span>/dt = (Q_in/V_eff)(T_brew − T) − λ_cool(T − T_amb) − λ_ld(T − T_dripper)
+          <br>dT_dripper/dt = λ_dl(T − T_dripper) − λ_da(T_dripper − T_amb)
         </div>
 
         <div class="eq-label" style="margin-top:14px">Dynamic viscosity (water)</div>
@@ -868,7 +869,7 @@ canvas{display:block;width:100%;height:auto}
           <div class="canvas-wrap">
             <img class="figure-img" src="v60_thermal.png" alt="V60 thermal coupling output figure">
           </div>
-          <div class="figure-note">The present baseline outputs are approximately 14.6% EY at 83°C, 16.4% at 93°C, and 17.7% at 99°C, with hotter water increasing slow-soluble extraction more strongly.</div>
+          <div class="figure-note">This remains a temperature-sweep reference. The measured Kinu 29 benchmark now includes an explicit server-side natural-convection node, which brings the final cup temperature close to the observed value without re-tuning vessel heat capacity.</div>
         </div>
       </div>
     </div>
@@ -885,13 +886,13 @@ canvas{display:block;width:100%;height:auto}
           <div class="chart-head">
             <div>
               <div class="chart-title">Generated Output — Flow Diagnostics</div>
-              <div class="chart-sub">This simulator output collects water head, flow decomposition, cumulative volume balance, bypass activation, permeability retention, and bed saturation in one diagnostics panel.</div>
+              <div class="chart-sub">This diagnostics panel is now also taken from the calibrated 180 s Kinu 29 run, so the hydraulic state view and the flow-fit panel above refer to the same simulated brew.</div>
             </div>
           </div>
           <div class="canvas-wrap">
-            <img class="figure-img" src="v60_simulation.png" alt="V60 flow diagnostics output figure">
+            <img class="figure-img" src="data/kinu29_calibrated_flow_diagnostics_180s.png" alt="Calibrated Kinu 29 flow diagnostics output figure">
           </div>
-          <div class="figure-note">In the current medium baseline, the bed retains roughly 42% of its initial permeability by the end of the brew, and the average bypass fraction is around 1.7%.</div>
+          <div class="figure-note">This panel is the hydraulic companion to the calibrated fit: water head, flow decomposition, cumulative volume balance, bypass activation, permeability retention, and saturation are all from the same split-clogging simulation that now feeds the two-layer extraction bed.</div>
         </div>
       </div>
 
@@ -924,9 +925,10 @@ canvas{display:block;width:100%;height:auto}
             <span>Parameter</span><span>Default value</span>
           </div>
           <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>k₀</span><span style="color:var(--accent)">6×10⁻¹¹ m²</span></div>
-          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>β (fines)</span><span style="color:var(--accent4)">3000 m⁻³</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>β_throat</span><span style="color:var(--accent4)">~1.45×10³</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>β_deposition</span><span style="color:var(--accent4)">~1.45×10³</span></div>
           <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>h_cap</span><span style="color:var(--accent3)">3 mm</span></div>
-          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>h_bed</span><span style="color:var(--text)">48 mm</span></div>
+          <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--row-div)"><span>h_bed</span><span style="color:var(--text)">53 mm</span></div>
           <div style="display:flex;justify-content:space-between;padding:4px 0"><span>h_gas₀ (medium)</span><span style="color:var(--accent2)">1 mm</span></div>
         </div>
         <div class="mini-note">This is the section that explains why fine grind does not just extract more. Once the bed compacts and permeability collapses, the whole brew migrates into a different hydraulic regime.</div>
@@ -999,34 +1001,34 @@ canvas{display:block;width:100%;height:auto}
         <div class="showcase-copy">
           <div class="eyebrow">Model Surface</div>
           <div class="showcase-title" style="font-size:32px">The repo exposes a reduced-order but fully coupled brew model, not a static recipe calculator.</div>
-          <div class="showcase-text">The technical point of this project is that the brew is treated as a stateful system. Hydraulic resistance, thermal loss, accessibility, and cup-side dilution all evolve together, and the generated figures are simply different slices through that same state trajectory.</div>
+          <div class="showcase-text">The technical point of this project is that the brew is treated as a stateful system. Hydraulic resistance, thermal loss, accessibility, and cup-side dilution all evolve together. The current repo no longer maintains an older fractal-PSD branch; the measured-bin model is now the main line.</div>
           <div class="showcase-list">
             <div class="showcase-item">
               <strong>State Vector</strong>
-              `h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T`
+              `h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct`
             </div>
             <div class="showcase-item">
               <strong>Primary Outputs</strong>
-              Brew time, drain time, bypass ratio, permeability retention, TDS, in-cup EY, dissolved EY, D10 diagnostics, and fast/slow flavor balance.
+              Brew time, drain time, bypass ratio, permeability retention, TDS, in-cup EY, dissolved EY, measured D10 diagnostics, and fast/slow cup balance.
             </div>
             <div class="showcase-item">
               <strong>Physical Closures</strong>
-              Darcy flow, capillary cutoff, wet-bed capillary boost, fines clogging, Newton cooling, roast-dependent chemistry, and Noyes-Whitney-like transport.
+              Darcy flow, split clogging, capillary cutoff, wet-bed capillary boost, two-node thermal coupling, roast-dependent chemistry, and bin-resolved Noyes-Whitney transport.
             </div>
           </div>
         </div>
         <div class="story-copy">
           <div class="eq-label">Core State</div>
-          <div class="eq">state = [h, V_out, V_poured, sat, C_fast, M_fast, C_slow, M_slow, T]</div>
+          <div class="eq">state = [h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct]</div>
           <div class="eq-label" style="margin-top:14px">Hydraulic Output Layer</div>
           <div class="eq eq-b">
-            Q_ext, Q_bp, k_eff, sat, h, brew_time, drain_time
+            Q_ext, Q_bp, k_eff, sat, h, brew_time, drain_time, throat/deposition clog diagnostics
           </div>
           <div class="eq-label" style="margin-top:14px">Cup Output Layer</div>
           <div class="eq eq-p">
-            C_out, TDS, EY_cup, EY_dissolved, EY_fast, EY_slow
+            C_out, TDS, EY_cup, EY_dissolved, EY_fast, EY_slow, cup temperature fit error
           </div>
-          <div class="mini-note">Project scope, installation, and reproducibility are intentionally kept in the README. This page is for surfacing the model and the figures it produces.</div>
+          <div class="mini-note">Project scope, installation, and reproducibility are intentionally kept in the README. This page is for surfacing the current best model, the measured calibration, and the regime figures it produces.</div>
         </div>
       </div>
     </div>

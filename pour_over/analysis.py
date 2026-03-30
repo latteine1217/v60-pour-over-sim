@@ -2,23 +2,32 @@
 analysis.py — V60 手沖模擬：分析與最佳化模組
 
 What:
-  提供三個分析工具函式：
+  保留一般分析與最佳化工具，包含：
     1. sensitivity_analysis  — OAT 靈敏度分析（龍捲風圖 + 2D 熱圖）
-    2. compare_grind_linkage — k–M 聯動 vs 獨立模型對比
-    3. find_optimal_grind    — 以 scipy.optimize.minimize_scalar 搜尋最佳研磨度
+    2. scan_wetbed_structure — 濕床結構參數掃描
+    3. compare_grind_linkage — k–M 聯動 vs 獨立模型對比
+    4. find_optimal_grind    — 以 scipy.optimize.minimize_scalar 搜尋最佳研磨度
+  並作為 benchmark / identifiability 工具的相容轉發層。
 
 Why:
-  將分析邏輯從 v60_sim.py 主流程中分離，使每個工具可獨立呼叫與測試。
+  將「一般分析」與「正式驗證線」分開後，
+  本模組應專注於可重複使用的探索型工具，同時維持舊 import 路徑不破壞 userspace。
 """
 
+import csv
 import dataclasses
+from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar
+from scipy.interpolate import interp1d
 
 from .params import V60Params, PourProtocol, RoastProfile
 from .core import simulate_brew, print_summary
+from .measured_io import load_flow_profile_csv, _measured_setup_overrides
+from .benchmark import _load_measured_benchmark_state, run_benchmark_suite
+from .identifiability import analyze_fit_identifiability, analyze_pref_flow_identifiability
 from .viz import plot_results
 
 
@@ -178,7 +187,7 @@ def sensitivity_analysis(
     for i, k_v in enumerate(k_scan):
         for j, T_v in enumerate(T_scan):
             p = dataclasses.replace(base, k=k_v, T_brew=T_v)
-            r = simulate_brew(p, protocol, t_end=400, n_eval=600)
+            r = simulate_brew(p, protocol, t_end=180, n_eval=600)
             EY_map[i, j]   = float(r["EY_cup_pct"][-1])
             ey_f = float(r["EY_fast_cup_pct"][-1])
             ey_s = float(r["EY_slow_cup_pct"][-1])
@@ -222,6 +231,242 @@ def sensitivity_analysis(
     print(f"2D 靈敏度熱圖已儲存至 {fname2}")
 
 
+def scan_wetbed_structure(
+    csv_path: str | Path | None = None,
+    summary_csv_path: str | Path | None = None,
+    gain_values: list[float] | np.ndarray | None = None,
+    rate_values: list[float] | np.ndarray | None = None,
+    release_values: list[float] | np.ndarray | None = None,
+    n_eval: int = 900,
+    save_prefix: str | Path | None = None,
+) -> dict:
+    """
+    掃描 `wetbed_struct_*` 參數，評估 χ 狀態是否值得作為正式校準自由度。
+
+    What:
+      使用量測 `V_in(t)` / `V_out(t)`，固定既有 `k` 與 `k_beta` 校準結果，
+      對 `(wetbed_struct_gain, wetbed_struct_rate, wetbed_impact_release_rate)`
+      做小網格掃描，輸出：
+        1. 每組的 `V_out RMSE`、`q_out RMSE`
+        2. 停流時間誤差
+        3. 結構態峰值 `max(chi)`
+        4. 綜合 score 與最佳組合
+
+    Why:
+      若 χ 對流量曲線完全無感，就不該保留成額外自由度；
+      若它能穩定改善 `V_out(t)`，且不靠極端拖長排水時間達成，
+      就值得保留為後續校準選項。
+    """
+    root_dir = Path(__file__).resolve().parents[1]
+    data_dir = root_dir / "data"
+    flow_path = Path(csv_path) if csv_path is not None else data_dir / "kinu29_light_20g_flow_profile.csv"
+    summary_path = (
+        Path(summary_csv_path)
+        if summary_csv_path is not None
+        else data_dir / "kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
+    )
+    output_prefix = Path(save_prefix) if save_prefix is not None else data_dir / "kinu29_wetbed_struct_scan"
+
+    gain_grid = np.asarray(gain_values if gain_values is not None else [0.0, 0.3, 0.6, 1.0], dtype=float)
+    rate_grid = np.asarray(rate_values if rate_values is not None else [0.0, 0.05, 0.10, 0.16], dtype=float)
+    release_grid = np.asarray(release_values if release_values is not None else [0.0, 0.6, 1.2, 1.8], dtype=float)
+
+    prof = load_flow_profile_csv(flow_path)
+    meta = prof["meta"]
+    t_obs = np.asarray(prof["t_s"], dtype=float)
+    v_in_obs = np.maximum.accumulate(np.asarray(prof["v_in_ml"], dtype=float))
+    v_out_obs = np.asarray(prof["v_out_ml"], dtype=float)
+    stop_flow_time_s = float(prof["stop_flow_time_s"])
+    dt_obs = np.diff(t_obs)
+    q_out_obs = np.diff(v_out_obs) / np.maximum(dt_obs, 1e-12)
+
+    protocol = PourProtocol.from_cumulative_profile(list(zip(t_obs, v_in_obs)))
+
+    roast_map = {
+        "light": RoastProfile.LIGHT,
+        "medium": RoastProfile.MEDIUM,
+        "dark": RoastProfile.DARK,
+    }
+    roast_key = meta["roast"].strip().lower()
+    roast_profile = roast_map.get(roast_key)
+    if roast_profile is None:
+        raise ValueError(f"未知烘焙度：{meta['roast']}")
+
+    base = V60Params.for_roast(roast_profile)
+    summary_row = None
+    if summary_path.exists():
+        with summary_path.open("r", encoding="utf-8", newline="") as f:
+            summary_row = next(csv.DictReader(f))
+
+    replace_kwargs = dict(
+        dose_g=float(meta["dose_g"]),
+        h_bed=float(meta["bed_height_cm"]) / 100.0,
+        T_brew=float(meta["brew_temp_C"]) + 273.15,
+        **_measured_setup_overrides(meta),
+    )
+    if summary_row is not None:
+        replace_kwargs.update(
+            k=float(summary_row["k_fit"]),
+            k_beta=float(summary_row["k_beta_fit"]),
+        )
+    params_base = dataclasses.replace(base, **replace_kwargs)
+
+    t_end = max(float(t_obs[-1]) + 30.0, 180.0)
+
+    def _evaluate(params_try: V60Params) -> dict:
+        """
+        用量測 `V_out(t)` / `q_out(t)` 直接評分單一參數組。
+        """
+        sim = simulate_brew(params_try, protocol, t_end=t_end, n_eval=n_eval)
+        interp_v = interp1d(
+            sim["t"], sim["v_out_ml"], kind="linear",
+            bounds_error=False, fill_value="extrapolate",
+        )
+        v_pred_obs = np.asarray(interp_v(t_obs), dtype=float)
+        q_pred_obs = np.diff(v_pred_obs) / np.maximum(dt_obs, 1e-12)
+        rmse_ml = float(np.sqrt(np.mean((v_pred_obs - v_out_obs) ** 2)))
+        velocity_rmse_mlps = float(np.sqrt(np.mean((q_pred_obs - q_out_obs) ** 2)))
+        drain_time_error_s = float(sim["drain_time"] - stop_flow_time_s)
+        # score 以體積擬合為主，流速次之，停流時間作 guardrail。
+        score = rmse_ml + 1.5 * velocity_rmse_mlps + 0.08 * abs(drain_time_error_s)
+        return {
+            "rmse_ml": rmse_ml,
+            "velocity_rmse_mlps": velocity_rmse_mlps,
+            "drain_time_error_s": drain_time_error_s,
+            "brew_time_s": float(sim["brew_time"]),
+            "drain_time_s": float(sim["drain_time"]),
+            "chi_max": float(np.max(sim["wetbed_struct"])),
+            "ey_pct": float(sim["EY_pct"][-1]),
+            "score": float(score),
+        }
+
+    baseline_metrics = _evaluate(params_base)
+    rows: list[dict] = []
+
+    total = len(gain_grid) * len(rate_grid) * len(release_grid)
+    done = 0
+    print("\n=== Wet-Bed Structure Scan ===")
+    print(f"  CSV          : {flow_path}")
+    print(f"  Grid         : {len(gain_grid)} × {len(rate_grid)} × {len(release_grid)} = {total}")
+    print(f"  Baseline     : rmse={baseline_metrics['rmse_ml']:.2f} mL, "
+          f"q_rmse={baseline_metrics['velocity_rmse_mlps']:.2f} mL/s, "
+          f"drain_err={baseline_metrics['drain_time_error_s']:+.1f} s")
+
+    for gain in gain_grid:
+        for rate in rate_grid:
+            for release in release_grid:
+                params_try = dataclasses.replace(
+                    params_base,
+                    wetbed_struct_gain=float(gain),
+                    wetbed_struct_rate=float(rate),
+                    wetbed_impact_release_rate=float(release),
+                )
+                metrics = _evaluate(params_try)
+                rows.append({
+                    "wetbed_struct_gain": float(gain),
+                    "wetbed_struct_rate": float(rate),
+                    "wetbed_impact_release_rate": float(release),
+                    **metrics,
+                })
+                done += 1
+        print(f"  gain {gain:.2f} done ({done}/{total})")
+
+    rows.sort(key=lambda row: row["score"])
+    csv_path_out = output_prefix.with_suffix(".csv")
+    csv_path_out.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "wetbed_struct_gain",
+        "wetbed_struct_rate",
+        "wetbed_impact_release_rate",
+        "rmse_ml",
+        "velocity_rmse_mlps",
+        "drain_time_error_s",
+        "brew_time_s",
+        "drain_time_s",
+        "chi_max",
+        "ey_pct",
+        "score",
+    ]
+    with csv_path_out.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    # 對每個 gain-rate cell，保留最佳 release 方便做 2D 判讀。
+    best_surface = np.zeros((len(gain_grid), len(rate_grid)))
+    best_release = np.zeros_like(best_surface)
+    best_rmse = np.zeros_like(best_surface)
+    for i, gain in enumerate(gain_grid):
+        for j, rate in enumerate(rate_grid):
+            subset = [
+                row for row in rows
+                if abs(row["wetbed_struct_gain"] - float(gain)) < 1e-12
+                and abs(row["wetbed_struct_rate"] - float(rate)) < 1e-12
+            ]
+            best_row = min(subset, key=lambda row: row["score"])
+            best_surface[i, j] = best_row["score"]
+            best_release[i, j] = best_row["wetbed_impact_release_rate"]
+            best_rmse[i, j] = best_row["rmse_ml"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.2))
+    fig.suptitle("Wet-Bed Structure Scan", fontsize=13, fontweight="bold")
+
+    im0 = axes[0].imshow(best_rmse, origin="lower", aspect="auto", cmap="YlOrBr")
+    axes[0].set_title("Best V_out RMSE by Gain/Rate")
+    axes[0].set_xlabel("Struct Rate")
+    axes[0].set_ylabel("Struct Gain")
+    axes[0].set_xticks(range(len(rate_grid)))
+    axes[0].set_xticklabels([f"{v:.2f}" for v in rate_grid])
+    axes[0].set_yticks(range(len(gain_grid)))
+    axes[0].set_yticklabels([f"{v:.2f}" for v in gain_grid])
+    for i in range(len(gain_grid)):
+        for j in range(len(rate_grid)):
+            axes[0].text(j, i, f"{best_rmse[i, j]:.2f}", ha="center", va="center", fontsize=8)
+    fig.colorbar(im0, ax=axes[0], label="RMSE [mL]")
+
+    im1 = axes[1].imshow(best_release, origin="lower", aspect="auto", cmap="Blues")
+    axes[1].set_title("Release Chosen by Best Score")
+    axes[1].set_xlabel("Struct Rate")
+    axes[1].set_ylabel("Struct Gain")
+    axes[1].set_xticks(range(len(rate_grid)))
+    axes[1].set_xticklabels([f"{v:.2f}" for v in rate_grid])
+    axes[1].set_yticks(range(len(gain_grid)))
+    axes[1].set_yticklabels([f"{v:.2f}" for v in gain_grid])
+    for i in range(len(gain_grid)):
+        for j in range(len(rate_grid)):
+            axes[1].text(j, i, f"{best_release[i, j]:.1f}", ha="center", va="center", fontsize=8)
+    fig.colorbar(im1, ax=axes[1], label="Release Rate")
+
+    plt.tight_layout()
+    fig_path_out = output_prefix.with_name(output_prefix.name + "_heatmap").with_suffix(".png")
+    plt.savefig(fig_path_out, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+
+    top_rows = rows[:5]
+    print("  --- Top 5 ---")
+    for row in top_rows:
+        print(
+            f"  gain={row['wetbed_struct_gain']:.2f}  rate={row['wetbed_struct_rate']:.2f}  "
+            f"release={row['wetbed_impact_release_rate']:.2f}  rmse={row['rmse_ml']:.2f} mL  "
+            f"q_rmse={row['velocity_rmse_mlps']:.2f} mL/s  drain_err={row['drain_time_error_s']:+.1f} s  "
+            f"chi_max={row['chi_max']:.3f}"
+        )
+    print(f"  CSV saved    : {csv_path_out}")
+    print(f"  Heatmap saved: {fig_path_out}")
+
+    return {
+        "baseline": baseline_metrics,
+        "best": rows[0],
+        "top_rows": top_rows,
+        "rows": rows,
+        "csv_path": str(csv_path_out),
+        "heatmap_path": str(fig_path_out),
+        "gain_grid": gain_grid,
+        "rate_grid": rate_grid,
+        "release_grid": release_grid,
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  k–M 聯動分析
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,11 +508,11 @@ def compare_grind_linkage(protocol: PourProtocol | None = None) -> dict:
     for k_v in k_range:
         # A. 獨立模型：只改 k
         p_indep = dataclasses.replace(base, k=k_v)
-        r_indep = simulate_brew(p_indep, protocol, t_end=600, n_eval=1200)
+        r_indep = simulate_brew(p_indep, protocol, t_end=180, n_eval=1200)
 
         # B. 聯動模型：k + max_EY + k_ext_coef 同步
         p_link  = V60Params.for_grind(k_v, base)
-        r_link  = simulate_brew(p_link, protocol, t_end=600, n_eval=1200)
+        r_link  = simulate_brew(p_link, protocol, t_end=180, n_eval=1200)
 
         def _metrics(r):
             ey_f  = float(r["EY_fast_cup_pct"][-1])
@@ -386,7 +631,7 @@ def find_optimal_grind(
         w_drain    = 0.005,  # 沖煮超時懲罰
         TDS_target = 13.0,   # SCA 理想 TDS 中心 [g/L]
         TDS_tol    = 1.5,    # SCA TDS 允許偏差 [g/L]（帶內不懲罰）
-        drain_max  = 300.0,  # 超過此沖煮時間開始懲罰 [s]
+        drain_max  = 180.0,  # 超過此沖煮時間開始懲罰 [s]
     )
     if score_weights is not None:
         w.update(score_weights)
@@ -395,7 +640,7 @@ def find_optimal_grind(
     def _loss(log_k: float) -> float:
         k_v = 10.0 ** log_k
         p   = V60Params.for_grind(k_v, base)
-        r   = simulate_brew(p, protocol, t_end=600, n_eval=800)
+        r   = simulate_brew(p, protocol, t_end=180, n_eval=800)
 
         ey  = float(r["EY_cup_pct"][-1])
         tds_arr = r["TDS_gl"]
@@ -423,7 +668,7 @@ def find_optimal_grind(
     k_opt = 10.0 ** res_opt.x
 
     params_opt = V60Params.for_grind(k_opt, base)
-    result_opt = simulate_brew(params_opt, protocol, t_end=600, n_eval=1200)
+    result_opt = simulate_brew(params_opt, protocol, t_end=180, n_eval=1200)
 
     # ── 結果輸出 ──────────────────────────────────────────────────────────────
     ey_opt  = float(result_opt["EY_cup_pct"][-1])
@@ -478,7 +723,7 @@ def find_optimal_grind(
     for lk in log_k_range:
         kv  = 10.0 ** lk
         p   = V60Params.for_grind(kv, base)
-        r   = simulate_brew(p, protocol, t_end=600, n_eval=600)
+        r   = simulate_brew(p, protocol, t_end=180, n_eval=600)
         ey_scan.append(float(r["EY_cup_pct"][-1]))
         tds_arr2 = r["TDS_gl"]
         valid2   = tds_arr2[tds_arr2 > 0]
