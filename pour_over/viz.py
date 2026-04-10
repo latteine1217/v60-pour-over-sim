@@ -1,8 +1,30 @@
+"""
+viz.py — V60 模擬視覺化模組
+
+What:
+    提供兩類圖面函式：
+    1. `plot_results()`、`plot_tds()`：直接吃單次模擬結果的診斷圖
+    2. `compare_*()`：以展示基準為中心的多情境比較圖
+
+Why:
+    視覺化層應只負責把已知的 `results` 或 `scenario configs` 轉成可讀圖面，
+    不應再承擔 calibrated baseline 選擇或量測資料載入。
+    目前展示狀態的組裝已移至 `showcase_state.py`，本模組維持純繪圖責任。
+"""
+
+from dataclasses import replace
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-from .params import V60Params, PourProtocol, RoastProfile
+from .params import PourProtocol
 from .core import simulate_brew
+from .showcase_state import (
+    latest_protocol,
+    latest_calibrated_params,
+    latest_grind_configs,
+    latest_correction_configs,
+)
 
 
 PALETTE = {
@@ -124,6 +146,8 @@ def plot_results(
         ("Brew time", f"{results['brew_time']:.0f} s"),
         ("Drain time", f"{results['drain_time']:.0f} s"),
         ("Avg bypass", f"{results['bypass_ratio'].mean() * 100:.1f}%"),
+        ("Avg pref", f"{results.get('pref_ratio', np.zeros_like(results['bypass_ratio'])).mean() * 100:.1f}%"),
+        ("Bloom choke", str(results.get("dominant_bloom_choke", "n/a"))),
         ("D10", f"{results['D10_um']:.0f} μm"),
     ])
 
@@ -136,10 +160,11 @@ def plot_results(
     _annotate_endpoint(ax, t[-1], results["h_mm"][-1], f"{results['h_mm'][-1]:.1f} mm", PALETTE["blue"], dx=-78)
 
     ax = axes[0, 1]
+    q_pref_mlps = results.get("q_pref_mlps", np.zeros_like(results["q_ext_mlps"]))
     ax.stackplot(
-        t, results["q_ext_mlps"], results["q_bp_mlps"],
-        labels=["Bed extraction", "Bypass"],
-        colors=[PALETTE["teal"], PALETTE["orange"]], alpha=0.72,
+        t, results["q_ext_mlps"], q_pref_mlps, results["q_bp_mlps"],
+        labels=["Bulk bed", "Fast path", "Bypass"],
+        colors=[PALETTE["teal"], PALETTE["blue"], PALETTE["orange"]], alpha=0.72,
     )
     ax.plot(t, results["q_in_eff_mlps"], color=PALETTE["blue"], lw=1.6, ls="--", label="Effective pour")
     _style_ax(ax, "Where the liquid goes", "Flow Rate [mL/s]")
@@ -175,17 +200,35 @@ def plot_results(
 
     ax = axes[1, 2]
     sat_pct = results["sat"] * 100
-    ax.fill_between(t, sat_pct, color=PALETTE["teal"], alpha=0.35)
-    ax.plot(t, sat_pct, color=PALETTE["teal"], lw=2.2)
-    _style_ax(ax, "Bed wetting and saturation", "Saturation [%]")
+    sat_flow_pct = results.get("sat_flow", results["sat"]) * 100
+    kr_pct = results.get("kr_sat", np.ones_like(results["sat"])) * 100
+    head_gate_pct = results.get("head_gate", np.ones_like(results["sat"])) * 100
+    ax.plot(t, sat_pct, color=PALETTE["teal"], lw=1.5, ls="--", label="sat")
+    ax.plot(t, sat_flow_pct, color=PALETTE["green"], lw=2.0, label="sat_flow")
+    ax.plot(t, kr_pct, color=PALETTE["purple"], lw=2.0, label="kr(sat)")
+    ax.plot(t, head_gate_pct, color=PALETTE["orange"], lw=2.0, label="head gate")
+    _style_ax(ax, "Bloom choke drivers", "Gate [%]")
     ax.set_ylim(0, 105)
     _add_time_guides(ax, results)
-    reached = np.where(results["sat"] >= 0.995)[0]
-    if reached.size > 0:
-        i = int(reached[0])
-        ax.scatter([t[i]], [sat_pct[i]], s=28, color=PALETTE["teal"], edgecolor="white", linewidth=0.8)
-        ax.annotate("fully wetted", (t[i], sat_pct[i]), xytext=(8, -14), textcoords="offset points",
-                    fontsize=8.3, color=PALETTE["teal"])
+    bloom_end = float(results.get("bloom_end_s", np.nan))
+    if np.isfinite(bloom_end):
+        ax.axvspan(0.0, bloom_end, color=PALETTE["muted"], alpha=0.08)
+        ax.axvline(bloom_end, color=PALETTE["muted"], lw=1.0, ls=":")
+    dominant = str(results.get("dominant_bloom_choke", "n/a"))
+    means = results.get("bloom_choke_means", {})
+    dominant_val = 100.0 * float(means.get(dominant, 0.0)) if isinstance(means, dict) else 0.0
+    ax.text(
+        0.03,
+        0.95,
+        f"Bloom dominant: {dominant} ({dominant_val:.0f}%)",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=8.2,
+        color=PALETTE["ink"],
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.72, "pad": 2.5},
+    )
+    ax.legend(fontsize=8.0, loc="lower right")
 
     _save_fig(fig, save_as, f"圖表已儲存至 {save_as}")
 
@@ -213,7 +256,12 @@ def plot_tds(
     ])
 
     ax = axes[0, 0]
-    ax.plot(t, results["C_bed_gl"], color=PALETTE["purple"], lw=2.3, label="Bed concentration")
+    if "C_bed_top_gl" in results and "C_bed_bottom_gl" in results:
+        ax.plot(t, results["C_bed_top_gl"], color="#c59ad8", lw=1.5, ls="--", label="Top layer")
+        ax.plot(t, results["C_bed_bottom_gl"], color=PALETTE["purple"], lw=2.3, label="Bottom layer")
+        ax.plot(t, results["C_bed_gl"], color="#7d6291", lw=1.8, alpha=0.85, label="Bed mean")
+    else:
+        ax.plot(t, results["C_bed_gl"], color=PALETTE["purple"], lw=2.3, label="Bed concentration")
     ax.plot(t, results["C_sat_eff_gl"], color="#bb8fd2", lw=1.7, ls="--", label="Effective saturation")
     _style_ax(ax, "Concentration inside the bed", "Concentration [g/L]")
     _add_time_guides(ax, results)
@@ -221,7 +269,9 @@ def plot_tds(
 
     ax = axes[0, 1]
     ax.plot(t, results["C_out_gl"], color=PALETTE["blue"], lw=2.4, label="Cup inflow concentration")
-    ax.plot(t, results["C_bed_gl"], color=PALETTE["purple"], lw=1.2, ls="--", alpha=0.55, label="Bed concentration")
+    ref_curve = results["C_bed_bottom_gl"] if "C_bed_bottom_gl" in results else results["C_bed_gl"]
+    ref_label = "Bottom-layer concentration" if "C_bed_bottom_gl" in results else "Bed concentration"
+    ax.plot(t, ref_curve, color=PALETTE["purple"], lw=1.2, ls="--", alpha=0.55, label=ref_label)
     _style_ax(ax, "What actually leaves the cone", "Concentration [g/L]")
     _add_time_guides(ax, results)
     ax.legend(fontsize=8.4, loc="upper right")
@@ -263,27 +313,22 @@ def compare_grind(protocol: PourProtocol | None = None) -> None:
     What: 左邊看動態曲線，右下角看最終杯子落點。
     Why:  這比把六張小圖塞滿更容易讀出「哪一個 grind 落在合理區間」。
     """
-    if protocol is None:
-        protocol = PourProtocol.standard_v60()
+    protocol = latest_protocol(protocol)
     _setup_style()
 
-    configs = {
-        "Coarse": V60Params(k=2e-10),
-        "Medium": V60Params(k=6e-11),
-        "Fine": V60Params(k=1.5e-11),
-    }
+    configs = latest_grind_configs()
     colors = [PALETTE["green"], PALETTE["blue"], PALETTE["red"]]
 
     fig, axes = plt.subplots(2, 2, figsize=(14.4, 8.8), constrained_layout=True)
     _summary_band(fig, "Grind Size Comparison", [
-        ("Coarse D10", f"{V60Params(k=2e-10).D10 * 1e6:.0f} μm"),
-        ("Medium D10", f"{V60Params(k=6e-11).D10 * 1e6:.0f} μm"),
-        ("Fine D10", f"{V60Params(k=1.5e-11).D10 * 1e6:.0f} μm"),
+        ("Coarse D10", f"{configs['Coarse'].D10 * 1e6:.0f} um"),
+        ("Medium D10", f"{configs['Medium'].D10 * 1e6:.0f} um"),
+        ("Fine D10", f"{configs['Fine'].D10 * 1e6:.0f} um"),
     ])
 
     finals = []
     for (label, params), color in zip(configs.items(), colors):
-        res = simulate_brew(params, protocol, t_end=300)
+        res = simulate_brew(params, protocol, t_end=180)
         t = res["t"]
         axes[0, 0].plot(t, res["h_mm"], color=color, lw=2.3, label=label)
         axes[0, 1].plot(t, res["q_out_mlps"], color=color, lw=2.3, label=label)
@@ -321,22 +366,17 @@ def compare_grind(protocol: PourProtocol | None = None) -> None:
 
 def compare_tds_grind(protocol: PourProtocol | None = None) -> None:
     """不同研磨度的濃度與萃取對比圖（保留供獨立呼叫）。"""
-    if protocol is None:
-        protocol = PourProtocol.standard_v60()
+    protocol = latest_protocol(protocol)
     _setup_style()
 
-    configs = {
-        "Coarse": V60Params(k=2e-10),
-        "Medium": V60Params(k=6e-11),
-        "Fine": V60Params(k=1.5e-11),
-    }
+    configs = latest_grind_configs()
     colors = [PALETTE["green"], PALETTE["blue"], PALETTE["red"]]
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5.5), constrained_layout=True)
     _summary_band(fig, "Grind vs Extraction Curves", [("View", "Concentration / TDS / EY")])
 
     for (label, params), color in zip(configs.items(), colors):
-        res = simulate_brew(params, protocol, t_end=300)
+        res = simulate_brew(params, protocol, t_end=180)
         axes[0].plot(res["t"], res["C_out_gl"], color=color, lw=2.3, label=label)
         axes[1].plot(res["t"], res["TDS_gl"], color=color, lw=2.3, label=label)
         axes[2].plot(res["t"], res["EY_cup_pct"], color=color, lw=2.3, label=label)
@@ -354,24 +394,17 @@ def compare_tds_grind(protocol: PourProtocol | None = None) -> None:
 
 def compare_corrections(protocol: PourProtocol | None = None) -> None:
     """基礎修正影響量級圖。"""
-    if protocol is None:
-        protocol = PourProtocol.standard_v60()
+    protocol = latest_protocol(protocol)
     _setup_style()
 
-    base = dict(k=2e-11, mu=3e-4, psi=2e-6)
-    scenarios = {
-        "Baseline": V60Params(**base, h_bed=1.0, k_beta=0, dose_g=0),
-        "+ bed height": V60Params(**base, h_bed=0.048, k_beta=0, dose_g=0),
-        "+ clogging": V60Params(**base, h_bed=0.048, k_beta=3e3, dose_g=0),
-        "+ absorption": V60Params(**base, h_bed=0.048, k_beta=3e3, dose_g=20),
-    }
+    scenarios = latest_correction_configs()
     colors = ["#9e9487", PALETTE["blue"], PALETTE["red"], PALETTE["green"]]
 
     fig, axes = plt.subplots(1, 2, figsize=(13.2, 5.4), constrained_layout=True)
     _summary_band(fig, "Correction Impact", [("Purpose", "order of magnitude check")])
 
     for (label, params), color in zip(scenarios.items(), colors):
-        res = simulate_brew(params, protocol, t_end=300)
+        res = simulate_brew(params, protocol, t_end=180)
         axes[0].plot(res["t"], res["h_mm"], color=color, lw=2.2, label=label)
         axes[1].plot(res["t"], res["q_out_mlps"], color=color, lw=2.2, label=label)
 
@@ -385,22 +418,17 @@ def compare_corrections(protocol: PourProtocol | None = None) -> None:
 
 def compare_grind_sizes(protocol: PourProtocol | None = None) -> None:
     """三種研磨度的水位、流量、旁路對比。"""
-    if protocol is None:
-        protocol = PourProtocol.standard_v60()
+    protocol = latest_protocol(protocol)
     _setup_style()
 
-    configs = {
-        "Coarse": V60Params(k=2e-10),
-        "Medium": V60Params(k=6e-11),
-        "Fine": V60Params(k=1.5e-11),
-    }
+    configs = latest_grind_configs()
     colors = [PALETTE["green"], PALETTE["blue"], PALETTE["red"]]
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5.4), constrained_layout=True)
     _summary_band(fig, "Grind Flow Comparison", [("Focus", "head / flow / bypass")])
 
     for (label, params), color in zip(configs.items(), colors):
-        res = simulate_brew(params, protocol, t_end=300)
+        res = simulate_brew(params, protocol, t_end=180)
         axes[0].plot(res["t"], res["h_mm"], color=color, lw=2.2, label=label)
         axes[1].plot(res["t"], res["q_out_mlps"], color=color, lw=2.2, label=label)
         axes[2].plot(res["t"], res["bypass_ratio"] * 100, color=color, lw=2.2, label=label)
@@ -420,14 +448,14 @@ def compare_thermal(protocol: PourProtocol | None = None) -> None:
     What: 用四張圖看溫度衰減、流量、TDS、EY。
     Why:  使用者通常想知道「變熱之後，流動變多少、杯子變多少」。
     """
-    if protocol is None:
-        protocol = PourProtocol.standard_v60()
+    protocol = latest_protocol(protocol)
     _setup_style()
 
+    base = latest_calibrated_params()
     configs = {
-        "83°C": V60Params(T_brew=356.15),
-        "93°C": V60Params(T_brew=366.15),
-        "99°C": V60Params(T_brew=372.15),
+        "83°C": replace(base, T_brew=356.15),
+        "93°C": replace(base, T_brew=366.15),
+        "99°C": replace(base, T_brew=372.15),
     }
     colors = [PALETTE["blue"], PALETTE["red"], PALETTE["gold"]]
 
@@ -440,7 +468,7 @@ def compare_thermal(protocol: PourProtocol | None = None) -> None:
 
     all_results = []
     for (label, params), color in zip(configs.items(), colors):
-        res = simulate_brew(params, protocol, t_end=300)
+        res = simulate_brew(params, protocol, t_end=180)
         all_results.append((label, color, res))
         fast = res["EY_fast_cup_pct"][-1]
         slow = res["EY_slow_cup_pct"][-1]
@@ -478,14 +506,14 @@ def compare_thermal(protocol: PourProtocol | None = None) -> None:
 
 def compare_flavor(protocol: PourProtocol | None = None) -> None:
     """Fast/Slow 組分的溫度對比圖。"""
-    if protocol is None:
-        protocol = PourProtocol.standard_v60()
+    protocol = latest_protocol(protocol)
     _setup_style()
 
+    base = latest_calibrated_params()
     configs = {
-        "83°C": V60Params(T_brew=356.15),
-        "93°C": V60Params(T_brew=366.15),
-        "99°C": V60Params(T_brew=372.15),
+        "83°C": replace(base, T_brew=356.15),
+        "93°C": replace(base, T_brew=366.15),
+        "99°C": replace(base, T_brew=372.15),
     }
     colors = [PALETTE["blue"], PALETTE["red"], PALETTE["gold"]]
 
@@ -495,7 +523,7 @@ def compare_flavor(protocol: PourProtocol | None = None) -> None:
     print("  溫度       | TDS    | EY     | Fast%  | TDS_fast | TDS_slow")
     print("  " + "-" * 65)
     for (label, params), color in zip(configs.items(), colors):
-        res = simulate_brew(params, protocol, t_end=300)
+        res = simulate_brew(params, protocol, t_end=180)
         t = res["t"]
         ey_f = res["EY_fast_cup_pct"][-1]
         ey_s = res["EY_slow_cup_pct"][-1]
