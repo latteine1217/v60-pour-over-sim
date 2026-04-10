@@ -73,8 +73,8 @@ The current best-fit reference in the repo is based on one measured brew:
 - ambient: `23°C`
 - dripper: ceramic V60, `123.5 g`
 - server equivalent heat capacity: `42.4 mL water equivalent`
-- measured PSD: calibrated against `D10 ≈ 374 μm`; if local PSD bins are available they can be injected through `psd_bins_csv_path`
-- calibrated fit summary: [data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv](/Users/latteine/Documents/coding/pour-over/data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv)
+- measured PSD: raw Kinu 29 export is stored under `data/kinu_29_light/`; model-ready artifacts are `data/kinu29_psd_summary.csv` and `data/kinu29_psd_bins.csv`
+- calibrated fit summary: `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
 
 Current fit metrics:
 
@@ -148,6 +148,25 @@ Structure summary:
 - `core.py` remains the single coupled ODE engine.
 - measured-data ingestion, observation-layer transforms, benchmark, identifiability, and showcase-state loading now live in dedicated modules instead of being folded into a few large files.
 
+## Data Artifacts
+
+The Kinu 29 PSD data has two layers:
+
+- raw measurement export: `data/kinu_29_light/kinu29_PSD_export_data.csv` and `data/kinu_29_light/kinu29_PSD_export_data_stats.csv`
+- model-ready artifacts: `data/kinu29_psd_summary.csv` and `data/kinu29_psd_bins.csv`
+
+The raw CSV files are the source of truth for particle geometry. The `kinu29_psd_*` CSV files are generated artifacts used by the model and should be regenerated rather than edited by hand:
+
+```bash
+uv run python -m pour_over.psd \
+  data/kinu_29_light/kinu29_PSD_export_data.csv \
+  --stats-csv data/kinu_29_light/kinu29_PSD_export_data_stats.csv \
+  --output data/kinu29_psd_summary.csv \
+  --bin-output data/kinu29_psd_bins.csv
+```
+
+Large source media in `data/kinu_29_light/` such as photos and PDFs are treated as local measurement media and are ignored by `.gitignore`. The CSV export and model-ready CSV artifacts are the reproducible inputs for the simulator.
+
 ## Usage
 
 ```python
@@ -171,6 +190,7 @@ from pour_over import V60Params, RoastProfile, PourProtocol, simulate_brew
 
 params = dataclasses.replace(
     V60Params.for_roast(RoastProfile.LIGHT),
+    psd_bins_csv_path="data/kinu29_psd_bins.csv",
     D10_measured_m=374.2e-6,
     h_bed=0.053,
     T_amb=296.15,
@@ -179,15 +199,6 @@ params = dataclasses.replace(
 )
 results = simulate_brew(params, PourProtocol.standard_v60(), t_end=180)
 print(f"bin count = {results['extraction_bin_count']}")
-```
-
-If you have local measured PSD bins, add:
-
-```python
-params = dataclasses.replace(
-    params,
-    psd_bins_csv_path="data/your_psd_bins.csv",
-)
 ```
 
 ```python

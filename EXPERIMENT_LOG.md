@@ -1,6 +1,10 @@
 # 實驗紀錄
 
-本文件整理目前專案中已落地的實驗結果，作為後續模型迭代的技術紀錄。
+本文件整理目前專案中已落地的實驗結果，作為後續模型迭代的 human-readable narrative。
+
+- canonical state backend：`docs/experiment_log.md`
+- 本檔定位：敘事版摘要與脈絡說明
+- 同步原則：當 `docs/experiment_log.md` 新增 active 結論時，本檔應同步更新對應摘要
 
 - 時區：`Asia/Taipei`（`+0800`）
 - 時間來源：
@@ -237,6 +241,33 @@
 
 ---
 
+## 2026-04-07 16:55:56 +0800
+
+- 改動：
+  - 將 `data/kinu_29_light/` 的 PSD raw export 轉成正式 model-ready artifact
+  - 新增 `data/kinu29_psd_summary.csv`
+  - 新增 `data/kinu29_psd_bins.csv`
+  - 執行 `uv run python -m compileall pour_over` 做最小 smoke check
+- 實驗：
+  - raw：`data/kinu_29_light/kinu29_PSD_export_data.csv`
+  - stats：`data/kinu_29_light/kinu29_PSD_export_data_stats.csv`
+  - summary：`data/kinu29_psd_summary.csv`
+  - bins：`data/kinu29_psd_bins.csv`
+- 結果：
+  - `particle_count = 4554`
+  - `hist_D10 / D50 / D90 = 0.374 / 0.723 / 1.611 mm`
+  - `model_D10 / D50 / D90 = 0.374 / 0.705 / 1.518 mm`
+  - `recommended_D10 = 374 μm`
+  - `fines_num_lt_0p40mm = 13.2 %`
+  - `multi-bin rows = 7`
+  - smoke test：`PASS`
+- 判讀：
+  - 這批 raw export 與目前正式 baseline 使用的 `D10 ≈ 374 μm` 一致，表示 measured PSD 主敘事已有正式數據來源
+  - 這次沒有重跑 calibrated fit 或 benchmark，所以新增的是 artifact reproducibility，不是新的擬合優勢結論
+  - 未來若 `data/kinu_29_light/` 內容更新，必須同步重生 `data/kinu29_psd_bins.csv`，不能只替換 raw 資料夾
+
+---
+
 ## 中間結論（供下次迭代直接使用）
 
 - `sat_flow` 硬切已被平滑鬆弛取代，避免 bloom 結束後的人為不連續
@@ -264,6 +295,10 @@
   - `vessel_equivalent_ml` 仍視為量測固定量
   - `lambda_server_ambient` 可作單自由度熱端 closure
   - 杯溫誤差優先由 server-side cooling 解釋，不回頭吸收到 cone 內熱容
+- measured PSD ingress 目前正式 artifact 應維持：
+  - `data/kinu29_psd_summary.csv`
+  - `data/kinu29_psd_bins.csv`
+  - 它們由 `data/kinu_29_light/` raw export 重建，不應手改
 
 ---
 
@@ -271,5 +306,7 @@
 
 - case：`kinu29_light_20g_measured`
 - 主摘要：`data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- PSD summary：`data/kinu29_psd_summary.csv`
+- PSD bins：`data/kinu29_psd_bins.csv`
 - benchmark：`data/benchmark_suite_summary.csv`
 - 最新狀態：`PASS`
