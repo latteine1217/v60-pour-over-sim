@@ -24,13 +24,14 @@ from .core import simulate_brew
 from .measured_io import (
     MEASURED_BED_HEIGHT_CM,
     MEASURED_VESSEL_EQUIV_ML,
-    MEASURED_AMBIENT_TEMP_C,
     _meta_float,
     _measured_setup_overrides,
     load_brew_log_csv,
     load_flow_profile_csv,
+    measured_case_psd_bins_path,
     protocol_from_brew_log,
     protocol_from_cumulative_input,
+    resolve_measured_ambient_temp_C,
 )
 from .observation import (
     mixed_cup_temperature_C,
@@ -46,12 +47,65 @@ from .viz import (
     plot_results,
 )
 
-DEFAULT_MEASURED_FLOW_CSV = "data/kinu29_light_20g_flow_profile.csv"
-DEFAULT_MEASURED_FLOW_FIT_PLOT = "data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png"
-DEFAULT_MEASURED_FLOW_FIT_SUMMARY = "data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
+DEFAULT_MEASURED_CASE_DIR = "data/kinu_29_light/4:12"
+DEFAULT_MEASURED_FLOW_CSV = f"{DEFAULT_MEASURED_CASE_DIR}/kinu29_light_20g_flow_profile.csv"
+DEFAULT_MEASURED_FLOW_FIT_PLOT = f"{DEFAULT_MEASURED_CASE_DIR}/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png"
+DEFAULT_MEASURED_FLOW_FIT_SUMMARY = f"{DEFAULT_MEASURED_CASE_DIR}/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
+DEFAULT_MEASURED_THERMAL_CSV = f"{DEFAULT_MEASURED_CASE_DIR}/kinu29_light_20g_thermal_profile.csv"
+DEFAULT_MEASURED_THERMAL_PLOT = f"{DEFAULT_MEASURED_CASE_DIR}/kinu29_light_20g_thermal_profile_comparison.png"
+DEFAULT_T2_VALIDATION_START_S = 10.0
+DEFAULT_T1_SENSOR_DELAY_S = 5.0
 DEFAULT_WETBED_STRUCT_RATE_FIXED = 0.06068366147200567
 DEFAULT_PREF_FLOW_OPEN_RATE_FIXED = 0.254074546131474
 DEFAULT_PREF_FLOW_TAU_DECAY_FIXED = 3.1401416403754285
+
+
+def _measured_psd_overrides(csv_path: str | Path | None = None) -> dict:
+    """
+    回傳 measured benchmark 應接入的 PSD artifact。
+
+    What:
+        若 repo 內存在正式的 `kinu29_psd_bins.csv`，就把路徑注入量測流程。
+
+    Why:
+        重生 PSD artifact 後，正式 fit 必須真的吃到同一份 bins；
+        否則只是更新檔案，主模型卻還停在舊的單粒徑假設。
+    """
+    bins_csv = (
+        measured_case_psd_bins_path(csv_path)
+        if csv_path is not None
+        else Path(__file__).resolve().parents[1] / DEFAULT_MEASURED_CASE_DIR / "kinu29_psd_bins.csv"
+    )
+    if not bins_csv.exists():
+        raise FileNotFoundError(f"缺少 measured PSD bins CSV：{bins_csv}")
+    return {"psd_bins_csv_path": str(bins_csv)}
+
+
+def _apply_sensor_fit_start_time(
+    t_obs_s: np.ndarray,
+    v_out_obs_ml: np.ndarray,
+    raw_fit_mask: np.ndarray,
+    *,
+    extra_delay_s: float,
+) -> np.ndarray:
+    """
+    對溫度量測施加感測器啟動時間。
+
+    What:
+        以「第一滴流出時間 + 額外緩衝」決定溫度量測何時開始進主驗證窗。
+
+    Why:
+        溫度計本身需要升溫時間；即使 CSV 原始旗標想使用更早的點，
+        thermal pipeline 也應在模型端強制排除這段 sensor startup。
+    """
+    t_obs = np.asarray(t_obs_s, dtype=float)
+    v_out = np.asarray(v_out_obs_ml, dtype=float)
+    fit_mask = np.asarray(raw_fit_mask, dtype=bool)
+    positive = np.where(v_out > 0.0)[0]
+    if positive.size == 0:
+        return np.zeros_like(fit_mask, dtype=bool)
+    fit_start_s = float(t_obs[positive[0]] + extra_delay_s)
+    return fit_mask & (t_obs >= fit_start_s)
 
 
 def evaluate_measured_flow_fit(
@@ -108,7 +162,7 @@ def evaluate_measured_flow_fit(
         atol=atol,
         max_step=max_step,
     )
-    ambient_temp_C = float(meta.get("ambient_temp_C", MEASURED_AMBIENT_TEMP_C))
+    ambient_temp_C = resolve_measured_ambient_temp_C(prof)
     obs_layer = apply_outflow_lag(
         sim,
         tau_lag_s,
@@ -186,6 +240,141 @@ def evaluate_measured_flow_fit(
     }
 
 
+def evaluate_measured_thermal_profile(
+    csv_path: str | Path,
+    params_try: V60Params,
+    tau_lag_s: float,
+    vessel_equivalent_ml: float | None = MEASURED_VESSEL_EQUIV_ML,
+    n_eval: int = 1200,
+    rtol: float = 1e-6,
+    atol: float = 1e-8,
+    max_step: float = 0.5,
+) -> dict:
+    """
+    用含溫度序列的量測資料評估熱端觀測。
+
+    What:
+        將量測的 `T1(server)`、`T2(outflow)`、估計 server volume 與 final TDS
+        對應到同一組 calibrated model / observation layer。
+
+    Why:
+        新量測的核心價值是熱端可觀測量，而不是近似的體積曲線；
+        因此應作為獨立驗證線，而不是直接覆寫正式 flow benchmark。
+        另外，`T2` 前幾秒常混入溫度計自身響應時間，因此主驗證窗從 `10 s`
+        開始；`t < 10 s` 只保留為 diagnostic points。
+    """
+    prof = load_flow_profile_csv(csv_path)
+    meta = prof["meta"]
+    t_obs = np.asarray(prof["t_s"], dtype=float)
+    v_in_obs = np.maximum.accumulate(np.asarray(prof["v_in_ml"], dtype=float))
+    est_server_volume_ml = np.asarray(prof.get("estimated_server_volume_ml", np.full_like(t_obs, np.nan)), dtype=float)
+    server_temp_obs = np.asarray(prof.get("server_temp_C", np.full_like(t_obs, np.nan)), dtype=float)
+    outflow_temp_obs = np.asarray(prof.get("outflow_temp_C", np.full_like(t_obs, np.nan)), dtype=float)
+    server_temp_mask = _apply_sensor_fit_start_time(
+        t_obs,
+        np.asarray(prof["v_out_ml"], dtype=float),
+        np.asarray(prof.get("server_temp_use_for_fit", np.zeros_like(t_obs)), dtype=bool) & np.isfinite(server_temp_obs),
+        extra_delay_s=DEFAULT_T1_SENSOR_DELAY_S,
+    )
+    outflow_temp_mask = (
+        np.asarray(prof.get("outflow_temp_use_for_fit", np.zeros_like(t_obs)), dtype=bool)
+        & np.isfinite(outflow_temp_obs)
+        & (t_obs >= DEFAULT_T2_VALIDATION_START_S)
+    )
+    volume_mask = np.isfinite(est_server_volume_ml)
+    final_tds_pct = prof["final_tds_pct"]
+
+    protocol = PourProtocol.from_cumulative_profile(list(zip(t_obs, v_in_obs)))
+    sim = simulate_brew(
+        params_try,
+        protocol,
+        t_end=max(float(t_obs[-1]) + 30.0, 180.0),
+        n_eval=n_eval,
+        rtol=rtol,
+        atol=atol,
+        max_step=max_step,
+    )
+    ambient_temp_C = resolve_measured_ambient_temp_C(prof)
+    obs_layer = apply_outflow_lag(
+        sim,
+        tau_lag_s,
+        ambient_temp_C=ambient_temp_C,
+        vessel_equivalent_ml=0.0 if vessel_equivalent_ml is None else vessel_equivalent_ml,
+        lambda_server_ambient=float(getattr(params_try, "lambda_server_ambient", 0.0)),
+    )
+    interp_server_volume = interp1d(
+        sim["t"], obs_layer["v_cup_ml"], kind="linear",
+        bounds_error=False, fill_value="extrapolate",
+    )
+    interp_server_temp = interp1d(
+        sim["t"], obs_layer["T_server_C"], kind="linear",
+        bounds_error=False, fill_value="extrapolate",
+    )
+    interp_effluent_temp = interp1d(
+        sim["t"], obs_layer["T_effluent_C"], kind="linear",
+        bounds_error=False, fill_value="extrapolate",
+    )
+    interp_outflow_temp = interp1d(
+        sim["t"], obs_layer["T_apex_mixed_C"], kind="linear",
+        bounds_error=False, fill_value="extrapolate",
+    )
+    model_server_volume_ml = np.asarray(interp_server_volume(t_obs), dtype=float)
+    model_server_temp_C = np.asarray(interp_server_temp(t_obs), dtype=float)
+    model_effluent_temp_C = np.asarray(interp_effluent_temp(t_obs), dtype=float)
+    model_apex_temp_C = np.asarray(interp_outflow_temp(t_obs), dtype=float)
+    model_outflow_temp_C = model_apex_temp_C
+
+    est_volume_rmse_ml = None
+    if np.any(volume_mask):
+        est_volume_rmse_ml = float(
+            np.sqrt(np.mean((model_server_volume_ml[volume_mask] - est_server_volume_ml[volume_mask]) ** 2))
+        )
+
+    server_temp_rmse_C = None
+    if np.any(server_temp_mask):
+        server_temp_rmse_C = float(
+            np.sqrt(np.mean((model_server_temp_C[server_temp_mask] - server_temp_obs[server_temp_mask]) ** 2))
+        )
+
+    outflow_temp_rmse_C = None
+    if np.any(outflow_temp_mask):
+        outflow_temp_rmse_C = float(
+            np.sqrt(np.mean((model_outflow_temp_C[outflow_temp_mask] - outflow_temp_obs[outflow_temp_mask]) ** 2))
+        )
+
+    tds_series_gl = np.asarray(sim["TDS_gl"], dtype=float)
+    tds_valid = tds_series_gl[tds_series_gl > 0.0]
+    model_final_tds_pct = float(tds_valid[-1] / 10.0) if tds_valid.size else 0.0
+    final_tds_error_pctpt = None if final_tds_pct is None else float(model_final_tds_pct - final_tds_pct)
+
+    return {
+        "csv_path": str(csv_path),
+        "meta": meta,
+        "protocol": protocol,
+        "sim": sim,
+        "obs_layer": obs_layer,
+        "t_obs_s": t_obs,
+        "v_in_obs_ml": v_in_obs,
+        "estimated_server_volume_ml": est_server_volume_ml,
+        "server_temp_obs_C": server_temp_obs,
+        "outflow_temp_obs_C": outflow_temp_obs,
+        "server_temp_fit_mask": server_temp_mask,
+        "outflow_temp_fit_mask": outflow_temp_mask,
+        "model_server_volume_ml": model_server_volume_ml,
+        "model_server_temp_C": model_server_temp_C,
+        "model_effluent_temp_C": model_effluent_temp_C,
+        "model_apex_temp_C": model_apex_temp_C,
+        "model_outflow_temp_C": model_outflow_temp_C,
+        "estimated_volume_rmse_ml": est_volume_rmse_ml,
+        "server_temp_rmse_C": server_temp_rmse_C,
+        "outflow_temp_rmse_C": outflow_temp_rmse_C,
+        "final_tds_pct": final_tds_pct,
+        "model_final_tds_pct": model_final_tds_pct,
+        "final_tds_error_pctpt": final_tds_error_pctpt,
+        "tau_lag_s": float(tau_lag_s),
+    }
+
+
 def fit_vessel_equivalent_ml(
     results: dict,
     final_cup_temp_C: float,
@@ -257,6 +446,7 @@ def fit_brew_log_final_temp(
         h_bed=_meta_float(meta, "bed_height_cm", MEASURED_BED_HEIGHT_CM) / 100.0,
         T_brew=_meta_float(meta, "brew_temp_C") + 273.15,
         **_measured_setup_overrides(meta),
+        **_measured_psd_overrides(csv_path),
     )
 
     t_end = 180.0
@@ -334,7 +524,6 @@ def save_fit_summary_csv(output_path: str | Path, info: dict) -> None:
 def fit_k_kbeta_from_flow_profile(
     csv_path: str | Path,
     params_init: V60Params | None = None,
-    min_pour_ml: float = 1.0,
     weights: dict | None = None,
     vessel_equivalent_ml: float | None = MEASURED_VESSEL_EQUIV_ML,
     tau_lag_init_s: float = 2.0,
@@ -418,13 +607,9 @@ def fit_k_kbeta_from_flow_profile(
         h_bed=_meta_float(meta, "bed_height_cm", MEASURED_BED_HEIGHT_CM) / 100.0,
         T_brew=_meta_float(meta, "brew_temp_C") + 273.15,
         **_measured_setup_overrides(meta),
+        **_measured_psd_overrides(csv_path),
     )
-    if min_pour_ml <= 0:
-        protocol = PourProtocol.from_cumulative_profile(list(zip(t_obs, v_in_obs)))
-    else:
-        # 目前標準做法仍建議直接使用累積注水曲線，以免人工切段丟失節奏資訊。
-        # 保留 min_pour_ml 參數只是為了向後相容。
-        protocol = PourProtocol.from_cumulative_profile(list(zip(t_obs, v_in_obs)))
+    protocol = PourProtocol.from_cumulative_profile(list(zip(t_obs, v_in_obs)))
 
     obs_interval_mask = fit_mask[1:] & fit_mask[:-1]
     dt_obs = np.diff(t_obs)
@@ -1101,6 +1286,141 @@ def plot_flow_fit_comparison(
 
     plt.tight_layout(rect=[0, 0, 1, 0.94])
     _save_fig(fig, save_as, f"流動擬合對照圖已儲存至 {save_as}")
+
+
+def plot_measured_thermal_profile_comparison(
+    info: dict,
+    save_as: str = DEFAULT_MEASURED_THERMAL_PLOT,
+) -> None:
+    """
+    繪製含 `T1/T2` 的熱端對照圖。
+
+    What:
+        上圖看累積注水與 server volume，
+        中圖看 server bulk temperature，
+        下圖看 cone outflow temperature。
+
+    Why:
+        這筆新量測的主要訊號是熱端時序，不應只壓成單一最終杯溫誤差。
+    """
+    _setup_style()
+
+    t_obs = np.asarray(info["t_obs_s"], dtype=float)
+    v_in_obs = np.asarray(info["v_in_obs_ml"], dtype=float)
+    est_server_volume_ml = np.asarray(info["estimated_server_volume_ml"], dtype=float)
+    server_temp_obs = np.asarray(info["server_temp_obs_C"], dtype=float)
+    outflow_temp_obs = np.asarray(info["outflow_temp_obs_C"], dtype=float)
+    server_temp_mask = np.asarray(info["server_temp_fit_mask"], dtype=bool)
+    outflow_temp_mask = np.asarray(info["outflow_temp_fit_mask"], dtype=bool)
+    model_server_volume_ml = np.asarray(info["model_server_volume_ml"], dtype=float)
+    model_server_temp_C = np.asarray(info["model_server_temp_C"], dtype=float)
+    model_outflow_temp_C = np.asarray(info["model_outflow_temp_C"], dtype=float)
+    sim = info["sim"]
+
+    fig, axes = plt.subplots(
+        3, 1, figsize=(11.5, 10.0),
+        gridspec_kw={"height_ratios": [2.3, 2.0, 2.0]},
+    )
+    _summary_band(fig, "Measured Thermal Observables vs Model", [
+        ("tau_lag", f"{info.get('tau_lag_s', np.nan):.2f} s"),
+        ("Vol RMSE", f"{info['estimated_volume_rmse_ml']:.1f} mL" if info.get("estimated_volume_rmse_ml") is not None else "n/a"),
+        ("T1 RMSE", f"{info['server_temp_rmse_C']:.2f} C" if info.get("server_temp_rmse_C") is not None else "n/a"),
+        ("T2 RMSE", f"{info['outflow_temp_rmse_C']:.2f} C" if info.get("outflow_temp_rmse_C") is not None else "n/a"),
+        ("TDS", f"{info['model_final_tds_pct']:.2f}% vs {info['final_tds_pct']:.2f}%" if info.get("final_tds_pct") is not None else f"{info['model_final_tds_pct']:.2f}%"),
+    ])
+
+    ax = axes[0]
+    ax.plot(t_obs, v_in_obs, color=PALETTE["gold"], lw=2.3, ls="--", label="Measured cumulative input")
+    ax.plot(sim["t"], info["obs_layer"]["v_cup_ml"], color=PALETTE["blue"], lw=2.4, label="Model server volume")
+    if np.isfinite(est_server_volume_ml).any():
+        ax.scatter(
+            t_obs[np.isfinite(est_server_volume_ml)],
+            est_server_volume_ml[np.isfinite(est_server_volume_ml)],
+            s=36,
+            color=PALETTE["orange"],
+            edgecolor="white",
+            linewidth=0.8,
+            label="Estimated server volume",
+            zorder=4,
+        )
+    _style_ax(ax, "Volume context", "Volume [mL]")
+    ax.legend(loc="upper left", ncol=2, fontsize=8.8)
+    ax.set_xlim(left=0.0)
+    ax.set_ylim(bottom=0.0)
+
+    ax = axes[1]
+    ax.plot(sim["t"], info["obs_layer"]["T_server_C"], color=PALETTE["red"], lw=2.4, label="Model T1 server")
+    if np.isfinite(server_temp_obs).any():
+        ax.scatter(
+            t_obs[~server_temp_mask & np.isfinite(server_temp_obs)],
+            server_temp_obs[~server_temp_mask & np.isfinite(server_temp_obs)],
+            s=34,
+            color=PALETTE["muted"],
+            edgecolor="white",
+            linewidth=0.8,
+            label="Observed T1 held-out",
+            zorder=4,
+        )
+        ax.scatter(
+            t_obs[server_temp_mask],
+            server_temp_obs[server_temp_mask],
+            s=38,
+            color=PALETTE["red"],
+            edgecolor="white",
+            linewidth=0.8,
+            label="Observed T1 used",
+            zorder=5,
+        )
+    _style_ax(ax, "Server bulk temperature (T1)", "Temperature [C]")
+    ax.legend(loc="upper left", ncol=2, fontsize=8.8)
+    ax.set_xlim(left=0.0)
+
+    ax = axes[2]
+    ax.plot(
+        sim["t"],
+        info["obs_layer"]["T_apex_mixed_C"],
+        color=PALETTE["teal"],
+        lw=2.4,
+        label="Model T2 apex mixed",
+    )
+    if np.isfinite(outflow_temp_obs).any():
+        ax.scatter(
+            t_obs[~outflow_temp_mask & np.isfinite(outflow_temp_obs)],
+            outflow_temp_obs[~outflow_temp_mask & np.isfinite(outflow_temp_obs)],
+            s=34,
+            color=PALETTE["muted"],
+            edgecolor="white",
+            linewidth=0.8,
+            label="Observed T2 held-out",
+            zorder=4,
+        )
+        ax.scatter(
+            t_obs[outflow_temp_mask],
+            outflow_temp_obs[outflow_temp_mask],
+            s=38,
+            color=PALETTE["teal"],
+            edgecolor="white",
+            linewidth=0.8,
+            label="Observed T2 used",
+            zorder=5,
+        )
+    _style_ax(ax, "Cone outflow temperature (T2)", "Temperature [C]")
+    ax.legend(loc="upper left", ncol=2, fontsize=8.8)
+    ax.set_xlim(left=0.0)
+    ax.text(
+        0.995, 0.06,
+        (
+            f"Final TDS error {info['final_tds_error_pctpt']:+.2f} %-pt"
+            if info.get("final_tds_error_pctpt") is not None
+            else "Final TDS n/a"
+        ),
+        transform=ax.transAxes,
+        ha="right", va="bottom", fontsize=8.6, color=PALETTE["ink"],
+        bbox=dict(boxstyle="round,pad=0.25", fc=PALETTE["panel"], ec=PALETTE["grid"], lw=0.8),
+    )
+
+    plt.tight_layout(rect=[0, 0, 1, 0.94])
+    _save_fig(fig, save_as, f"熱端對照圖已儲存至 {save_as}")
 
 
 def generate_measured_flow_fit_artifacts(

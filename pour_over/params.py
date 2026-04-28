@@ -328,6 +328,31 @@ class V60Params(V60Constant):
     # 液體與濾杯間的等效熱交換係數 [1/s]
     # Why: 補上液體對濾杯持續放熱，而不只在終點把容器當一次性混杯熱沉
 
+    lambda_liquid_effluent: float = 0.02
+    # 床內 bulk 液體與床底 effluent 熱狀態的等效交換係數 [1/s]
+    # Why: `T2` 不應直接等於 bulk 熱節點；需要一個最小必要的出口熱歷史狀態
+
+    effluent_coupling_gate_mode: str = "constant"
+    # H2 counterfactual 用；控制 bulk-effluent 熱耦合是否受水力連通 gate 調節
+
+    apex_channel_mode: str = "dual_path_between_pours"
+    # 通道效應 closure；將床內 transport flow 拆成 fast apex channel 與 side seepage。
+    # Why: bloom 期間一部分水向下穿透形成主通道，側邊慢速滲流再匯流到 apex；
+    #      T2 量到的是兩條路徑混合後的 apex 溫度，不是單一瞬時 effluent。
+
+    apex_channel_release_tau_s: float = 3.0
+    # recipe/flow event 後通道釋放的平滑時間常數 [s]；避免 hard switch 造成不連續。
+
+    apex_contact_tau_s: float = 6.0
+    # side/contact path 的一階熱歷史時間常數 [s]。
+
+    apex_contact_weight: float = 0.35
+    # side/contact path 中 dripper/contact 溫度權重；保守沿用 H3/H4 診斷值。
+
+    lambda_effluent_dripper: float = 0.02
+    # 床底 effluent 與濾杯接觸界面的等效熱交換係數 [1/s]
+    # Why: 出口液在離開粉床前仍會與較冷結構界面交換熱量
+
     lambda_dripper_ambient: float = 0.0
     # 濾杯對環境自然對流冷卻係數 [1/s]
     # Why: 使用者傾向忽略濾紙，改由濾杯本體與空氣自然對流承擔額外散熱
@@ -504,6 +529,13 @@ class V60Params(V60Constant):
     shell_thickness: float = 200e-6
     # 可萃取外層厚度 [m]；可及可溶物質量 ∝ 外層殼層體積
 
+    gamma_slow_area: float = 1.0
+    # Slow pool 有效交換界面的 shell/core 懲罰指數 [-]
+    # Why:
+    #   若 slow 代表 deeper-core inventory，則它不應直接擁有整顆粒的外表面。
+    #   這個指數將 `A_slow ~ A_total * (1-shell_acc)^gamma`，先用最小版本把
+    #   slow interface 從「全表面」降回受不可及 core 比例限制的有效界面。
+
     nu_p_fast: float = 1.1e11
     # Einstein-Smoluchowski mobility：Fast 組分 D = ν_p k_B T
 
@@ -609,12 +641,6 @@ class V60Params(V60Constant):
           有實測 PSD 時，這些量不應再由理想碎形分佈近似；
           直接整合 bins 能讓表面積與殼層模型真正落在量測分布上。
         """
-        def shell_accessibility_fraction_mm(diameter_mm: float) -> float:
-            radius = 0.5 * max(float(diameter_mm), 1e-12)
-            shell_mm = min(self.shell_thickness * 1e3, radius)
-            core_radius = max(radius - shell_mm, 0.0)
-            return 1.0 - (core_radius / radius) ** 3
-
         rows_sorted = self._load_psd_bin_rows(bins_csv_path, diameter_scale=diameter_scale)
         vol_total = sum(max(r["volume_fraction"], 0.0) for r in rows_sorted)
         if vol_total <= 0:
@@ -630,14 +656,16 @@ class V60Params(V60Constant):
 
         surface_area_mm_inv = 0.0
         surface_area_fast_mm_inv = 0.0
+        surface_area_slow_mm_inv = 0.0
         shell_fraction_vol = 0.0
         diffusion_path_fast_mm = 0.0
         diffusion_path_slow_mm = 0.0
         shell_weight_total = 0.0
+        core_weight_total = 0.0
         throat_clog_index = 0.0
         deposition_clog_index = 0.0
-        fast_reactive_index = 0.0
-        slow_reactive_index = 0.0
+        fast_inventory_index = 0.0
+        slow_inventory_index = 0.0
         fine_num_total = 0.0
         fine_diameter_acc_mm = 0.0
         for row in rows_sorted:
@@ -645,24 +673,24 @@ class V60Params(V60Constant):
             num_w = max(row["num_fraction"], 0.0) / max(num_total, 1e-12)
             d_mean = max(row["diameter_eq_mean_mm"], 1e-9)
             sv_mm_inv = row["surface_to_volume_mm_inv_mean"]
-            shell_acc = shell_accessibility_fraction_mm(d_mean)
-            core_ratio = max(1.0 - shell_acc, 0.0) ** (1.0 / 3.0)
-            core_radius_mm = 0.5 * d_mean * core_ratio
-            shell_depth_mm = min(self.shell_thickness * 1e3, 0.5 * d_mean)
-            shell_mid_mm = max(0.5 * shell_depth_mm, 1e-9)
+            geom = self._shell_geometry_from_diameter(d_mean * 1e-3)
+            shell_acc = geom["shell_fraction"]
+            slow_area_frac = max(1.0 - shell_acc, 0.0) ** self.gamma_slow_area
             aspect = max(row["aspect_ratio_mean"], 1.0)
             roundness = max(row["roundness_mean"], 0.25)
             irregularity = (aspect / roundness) ** 0.35
             surface_area_mm_inv += vol_w * sv_mm_inv
             surface_area_fast_mm_inv += vol_w * sv_mm_inv * shell_acc
+            surface_area_slow_mm_inv += vol_w * sv_mm_inv * slow_area_frac
             shell_fraction_vol += vol_w * shell_acc
-            diffusion_path_fast_mm += vol_w * shell_acc * shell_mid_mm
-            diffusion_path_slow_mm += vol_w * max(1.0 - shell_acc, 0.0) * max(core_radius_mm, shell_mid_mm)
+            diffusion_path_fast_mm += vol_w * shell_acc * geom["fast_path_m"] * 1e3
+            diffusion_path_slow_mm += vol_w * max(1.0 - shell_acc, 0.0) * geom["slow_path_m"] * 1e3
             shell_weight_total += vol_w * shell_acc
+            core_weight_total += vol_w * max(1.0 - shell_acc, 0.0)
             throat_clog_index += num_w * irregularity * min(0.45 / d_mean, 2.0)
             deposition_clog_index += vol_w * irregularity * min(0.55 / d_mean, 1.8)
-            fast_reactive_index += vol_w * sv_mm_inv * shell_acc
-            slow_reactive_index += vol_w * sv_mm_inv * max(1.0 - shell_acc, 0.0)
+            fast_inventory_index += vol_w * shell_acc
+            slow_inventory_index += vol_w * max(1.0 - shell_acc, 0.0)
             if d_mean < 0.50:
                 fine_num_total += num_w
                 fine_diameter_acc_mm += num_w * d_mean
@@ -677,14 +705,14 @@ class V60Params(V60Constant):
         fines_vol_lt_0p40 = sum(max(r["volume_fraction"], 0.0) for r in rows_sorted if r["d_mid_mm"] < 0.40) / vol_total
         fines_vol_lt_0p50 = sum(max(r["volume_fraction"], 0.0) for r in rows_sorted if r["d_mid_mm"] < 0.50) / vol_total
         fast_path_mm = diffusion_path_fast_mm / max(shell_weight_total, 1e-12)
-        slow_path_mm = diffusion_path_slow_mm if diffusion_path_slow_mm > 1e-12 else fast_path_mm
-        fast_pool_fraction = fast_reactive_index / max(fast_reactive_index + slow_reactive_index, 1e-12)
+        slow_path_mm = diffusion_path_slow_mm / max(core_weight_total, 1e-12) if core_weight_total > 1e-12 else fast_path_mm
+        fast_pool_fraction = fast_inventory_index / max(fast_inventory_index + slow_inventory_index, 1e-12)
         fine_diameter_mean_mm = fine_diameter_acc_mm / max(fine_num_total, 1e-12) if fine_num_total > 1e-12 else D10_mm
 
         return {
             "surface_area": surface_area_mm_inv * 1e3,
             "surface_area_fast": surface_area_fast_mm_inv * 1e3,
-            "surface_area_slow": surface_area_mm_inv * 1e3,
+            "surface_area_slow": surface_area_slow_mm_inv * 1e3,
             "shell_fraction": shell_fraction_vol,
             "diffusion_path_m": slow_path_mm * 1e-3,
             "diffusion_path_fast_m": fast_path_mm * 1e-3,
@@ -733,8 +761,8 @@ class V60Params(V60Constant):
         area_slow_list: list[float] = []
         path_fast_list: list[float] = []
         path_slow_list: list[float] = []
-        fast_reactive: list[float] = []
-        slow_reactive: list[float] = []
+        fast_inventory: list[float] = []
+        slow_inventory: list[float] = []
         num_fraction: list[float] = []
         vol_fraction: list[float] = []
         d_mid_m: list[float] = []
@@ -746,11 +774,8 @@ class V60Params(V60Constant):
             num_w = max(row["num_fraction"], 0.0)
             vol_w = max(row["volume_fraction"], 0.0) / vol_total
             d_mean_m = max(row["diameter_eq_mean_mm"] * 1e-3, 1e-12)
-            shell_acc = float(np.clip(row["shell_accessibility_volume_weighted"], 0.0, 1.0))
-            core_ratio = max(1.0 - shell_acc, 0.0) ** (1.0 / 3.0)
-            core_radius_m = 0.5 * d_mean_m * core_ratio
-            shell_depth_m = min(self.shell_thickness, 0.5 * d_mean_m)
-            shell_mid_m = max(0.5 * shell_depth_m, 1e-12)
+            geom = self._shell_geometry_from_diameter(d_mean_m)
+            shell_acc = geom["shell_fraction"]
             sv_m_inv = row["surface_to_volume_mm_inv_mean"] * 1e3
             V_solid_i = V_solid_total * vol_w
 
@@ -760,10 +785,12 @@ class V60Params(V60Constant):
 
             area_fast_list.append(A_fast_i)
             area_slow_list.append(A_slow_i)
-            path_fast_list.append(max(0.25 * self.shell_thickness, shell_mid_m))
-            path_slow_list.append(max(self.shell_thickness, max(core_radius_m, shell_mid_m)))
-            fast_reactive.append(max(A_fast_i, 0.0))
-            slow_reactive.append(max(A_total_i * max(1.0 - shell_acc, 0.05), 0.0))
+            path_fast_list.append(geom["fast_path_m"])
+            path_slow_list.append(geom["slow_path_m"])
+            # 初始可溶物庫存屬於固體質量分配問題，不應由反應面積直接決定。
+            # 這裡先採 constant-solids-density 近似，以 bin 固體體積分率分配 fast/slow inventory。
+            fast_inventory.append(max(vol_w * shell_acc, 0.0))
+            slow_inventory.append(max(vol_w * (1.0 - shell_acc), 0.0))
             num_fraction.append(num_w)
             vol_fraction.append(vol_w)
             d_mid_m.append(max(row["d_mid_mm"] * 1e-3, 1e-12))
@@ -771,11 +798,11 @@ class V60Params(V60Constant):
             roundness.append(max(row["roundness_mean"], 0.25))
             shell_fraction.append(shell_acc)
 
-        fast_reactive_arr = np.asarray(fast_reactive, dtype=float)
-        slow_reactive_arr = np.asarray(slow_reactive, dtype=float)
+        fast_inventory_arr = np.asarray(fast_inventory, dtype=float)
+        slow_inventory_arr = np.asarray(slow_inventory, dtype=float)
         vol_arr = np.asarray(vol_fraction, dtype=float)
-        fast_mass_frac = fast_reactive_arr / max(float(np.sum(fast_reactive_arr)), 1e-18)
-        slow_mass_frac = slow_reactive_arr / max(float(np.sum(slow_reactive_arr)), 1e-18)
+        fast_mass_frac = fast_inventory_arr / max(float(np.sum(fast_inventory_arr)), 1e-18)
+        slow_mass_frac = slow_inventory_arr / max(float(np.sum(slow_inventory_arr)), 1e-18)
 
         return {
             "count": len(rows_sorted),
@@ -791,6 +818,40 @@ class V60Params(V60Constant):
             "path_slow_m": np.asarray(path_slow_list, dtype=float),
             "fast_mass_fraction": fast_mass_frac,
             "slow_mass_fraction": slow_mass_frac,
+        }
+
+    def _shell_geometry_from_diameter(self, diameter_m: float) -> dict[str, float]:
+        """
+        由代表粒徑推回 shell/core 幾何與 characteristic path。
+
+        What:
+          給定等效球直徑與目前 `shell_thickness`，回傳：
+          - shell 可及體積比例
+          - shell 厚度與殘餘 core 半徑
+          - fast / slow pool 的 characteristic diffusion path
+
+        Why:
+          measured PSD 下，shell accessibility 與 diffusion path 必須來自同一套幾何，
+          否則會出現「aggregate budget 用一種 shell 定義、bin-resolved path 又用另一種」
+          的雙重計價。尤其 slow path 不應再被 `shell_thickness` 直接拉長；
+          它應只反映剩餘不可及 core 到 shell-core 介面的代表距離。
+        """
+        diameter_m = max(float(diameter_m), 1e-12)
+        radius_m = 0.5 * diameter_m
+        shell_depth_m = min(max(float(self.shell_thickness), 0.0), radius_m)
+        core_radius_m = max(radius_m - shell_depth_m, 0.0)
+        shell_fraction = 1.0 - (core_radius_m / max(radius_m, 1e-12)) ** 3
+        fast_path_m = max(0.5 * shell_depth_m, 1e-12)
+        # 對均勻分布於球體 core 的溶質，至 shell-core 介面的平均徑向距離約為 core_radius / 4。
+        slow_core_path_m = max(0.25 * core_radius_m, 0.0)
+        slow_path_m = max(fast_path_m, slow_core_path_m)
+        return {
+            "radius_m": float(radius_m),
+            "shell_depth_m": float(shell_depth_m),
+            "core_radius_m": float(core_radius_m),
+            "shell_fraction": float(shell_fraction),
+            "fast_path_m": float(fast_path_m),
+            "slow_path_m": float(slow_path_m),
         }
 
     def _set_extraction_bins(self, bins: dict | None = None) -> None:
@@ -934,24 +995,17 @@ class V60Params(V60Constant):
         self.ref_psd_fast_pool_fraction = ref_particle.get("fast_pool_fraction", np.nan)
         # 固相溶質耗盡模型
         # 多組分可萃量分流：
-        # - fast pool 主要來自外層較易接觸的可溶物，因此直接吃 shell penalty
-        # - slow pool 代表較深層、較慢釋出的可溶物，不應被 200 μm outer-shell 假設全額砍掉
-        #   這裡採用較溫和的 blended accessibility，避免把整體可萃量壓得過低
+        # - 總可萃量先固定為 dose × max_EY，避免 shell 幾何同時改變 fast/slow split 與總量
+        # - measured PSD / shell 幾何只負責改變 fast-vs-slow 的分流比例
+        # 這能避免「同一個可及性訊號同時把兩池庫存一起放大」的雙重計價。
         if np.isfinite(self.psd_fast_pool_fraction) and np.isfinite(self.ref_psd_fast_pool_fraction):
             psd_fast_shift = (self.psd_fast_pool_fraction / max(self.ref_psd_fast_pool_fraction, 1e-12)) ** 0.25
         else:
             psd_fast_shift = 1.0
         self.fast_fraction_effective = float(np.clip(self.fast_fraction * psd_fast_shift, 0.12, 0.78))
-        fast_access_ratio = self.shell_accessibility_ratio
-        slow_access_ratio = 0.5 * (1.0 + self.shell_accessibility_ratio)
-        self.M_fast_0 = self.dose_g * self.max_EY * self.fast_fraction_effective * fast_access_ratio
-        self.M_slow_0 = self.dose_g * self.max_EY * (1.0 - self.fast_fraction_effective) * slow_access_ratio
-        self.M_sol_0 = self.M_fast_0 + self.M_slow_0
-        # κ = C_sat_0 / M_sol_0 [L⁻¹]；C_sat_eff(t) = κ·M_sol(t)
-        # 單位：[g/L] / [g] = [1/L]（與 SI：k_ext[m³/s]×C_sat[kg/m³] 一致）
-        # dose_g=0（用於 baseline 對比）時退化為純流體模型，不需萃取
-        # 保留舊 kappa（單組分，backward compat）
-        self.kappa = (self.C_sat / self.M_sol_0) if self.M_sol_0 > 0 else 0.0
+        self.M_sol_0 = self.dose_g * self.max_EY
+        self.M_fast_0 = self.M_sol_0 * self.fast_fraction_effective
+        self.M_slow_0 = self.M_sol_0 - self.M_fast_0
         # Noyes-Whitney 參考校準：以中研磨參考幾何反推無因次效率因子
         # k_NW = η * A_eff * D / L，其中 η 吸收 tortuosity / 未建模阻力 / 單位校準
         A_fast_ref = self.noyes_whitney_area(slow=False, use_reference=True)
@@ -1008,26 +1062,25 @@ class V60Params(V60Constant):
 
     def _single_bin_particle_stats(self, D10_target: float) -> dict:
         """
-        以單一 representative bin 建立 fallback 粒子統計。
+        以單一 representative bin 建立粒子統計。
 
         What:
-          將沒有 measured PSD 時的 fallback 也收斂到「同一套 bin 模型」：
+          將沒有 measured PSD 時的單一 bin 模式也收斂到「同一套 bin 模型」：
           - 代表直徑直接取 D10
           - 形狀預設為近球形
           - shell / core 幾何依 200 μm 殼層直接解析計算
 
         Why:
           舊的理想碎形 PSD 是另一條獨立流程。現在只保留單一最佳模型，
-          fallback 也必須走 bin-resolved 的同一套幾何語言，而不是再維護第二種 PSD closure。
+          單一 bin 模式也必須走 bin-resolved 的同一套幾何語言，而不是再維護第二種 PSD closure。
         """
         d = max(D10_target, self.particle_d_min)
-        radius = 0.5 * d
-        shell_depth = min(self.shell_thickness, radius)
-        core_radius = max(radius - shell_depth, 0.0)
-        shell_fraction = 1.0 - (core_radius / max(radius, 1e-12)) ** 3
+        geom = self._shell_geometry_from_diameter(d)
+        shell_fraction = geom["shell_fraction"]
+        slow_area_fraction = max(1.0 - shell_fraction, 0.0) ** self.gamma_slow_area
         surface_area = 6.0 / max(d, 1e-18)
-        fast_path = max(0.5 * shell_depth, 1e-12)
-        slow_path = max(self.shell_thickness, max(core_radius, fast_path))
+        fast_path = geom["fast_path_m"]
+        slow_path = geom["slow_path_m"]
         fines_flag_030 = float(d < 0.30e-3)
         fines_flag_040 = float(d < 0.40e-3)
         fines_flag_050 = float(d < 0.50e-3)
@@ -1036,7 +1089,7 @@ class V60Params(V60Constant):
         return {
             "surface_area": float(surface_area),
             "surface_area_fast": float(surface_area * shell_fraction),
-            "surface_area_slow": float(surface_area),
+            "surface_area_slow": float(surface_area * slow_area_fraction),
             "shell_fraction": float(shell_fraction),
             "diffusion_path_m": float(slow_path),
             "diffusion_path_fast_m": float(fast_path),
@@ -1356,7 +1409,8 @@ class V60Params(V60Constant):
             a_s_raw = self.ref_surface_area_fast_spec if use_reference else self.surface_area_fast_spec
             shell_frac = self.ref_shell_fraction_abs if use_reference else self.shell_fraction_abs
             # `surface_area_fast_spec` 已經在 bins 整合時包含 shell-accessibility 權重；
-            # 這裡改回「每單位可及殼層體積的界面密度」，避免和 M_fast_0 的 shell penalty 重複。
+            # 這裡改回「每單位可及殼層體積的界面密度」，避免把同一個 shell 幾何
+            # 同時重複寫進界面面積與 fast/slow inventory split。
             a_s = a_s_raw / max(shell_frac, 1e-12)
             f_shell = 1.0
         V_solid = (1.0 - self.phi) * self.V_bed
@@ -1372,13 +1426,10 @@ class V60Params(V60Constant):
             path = self.ref_diffusion_path_slow_m if use_reference else self.diffusion_path_slow_m
             if self.psd_bins_csv_path:
                 fast_path = self.ref_diffusion_path_fast_m if use_reference else self.diffusion_path_fast_m
-                # measured-bin 下，`diffusion_path_slow_m` 代表 deeper-core 的體積加權平均；
-                # 直接拿來當 0D `L_eff` 會偏向最深核心，對 reduced-order 模型過重。
-                # 幾何平均保留「比 fast 更深」，但不把整個 slow pool 視為都來自最深處。
-                path = np.sqrt(max(path * fast_path, 1e-18))
-            return max(self.shell_thickness, path)
+                path = max(path, fast_path)
+            return max(path, 1e-12)
         path = self.ref_diffusion_path_fast_m if use_reference else self.diffusion_path_fast_m
-        return max(0.25 * self.shell_thickness, path)
+        return max(path, 1e-12)
 
     def k_beta_prior_from_psd(self) -> float:
         """

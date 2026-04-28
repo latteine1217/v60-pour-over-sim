@@ -10,7 +10,6 @@ Why:
     把它們從 viz.py 抽離後，畫圖函式就能回到純輸入 -> 純輸出。
 """
 
-import csv
 from dataclasses import replace
 from pathlib import Path
 
@@ -23,23 +22,29 @@ def data_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "data"
 
 
+def measured_case_dir(case_id: str = "4:12") -> Path:
+    """回傳 measured case 目錄；預設仍指向正式 benchmark case。"""
+    case_dir = data_dir() / "kinu_29_light" / case_id
+    if not case_dir.exists():
+        raise FileNotFoundError(f"缺少 measured case 目錄：{case_dir}")
+    return case_dir
+
+
 def latest_protocol(protocol: PourProtocol | None = None) -> PourProtocol:
     """
     回傳展示頁預設使用的注水協議。
 
     What:
-        優先使用 measured `V_in(t)`；若缺檔則退回標準 V60 recipe。
+        使用正式 measured `V_in(t)` 作為展示頁預設協議。
 
     Why:
-        compare 圖應優先圍繞目前正式 benchmark case，而不是默默退回舊預設。
+        compare 圖必須圍繞正式 benchmark case，不允許缺檔時默默回退到別的 recipe。
     """
     if protocol is not None:
         return protocol
-    flow_csv = data_dir() / "kinu29_light_20g_flow_profile.csv"
-    if flow_csv.exists():
-        obs = load_flow_profile_csv(flow_csv)
-        return PourProtocol.from_cumulative_profile(list(zip(obs["t_s"], obs["v_in_ml"])))
-    return PourProtocol.standard_v60()
+    flow_csv = measured_case_dir() / "kinu29_light_20g_flow_profile.csv"
+    obs = load_flow_profile_csv(flow_csv)
+    return PourProtocol.from_cumulative_profile(list(zip(obs["t_s"], obs["v_in_ml"])))
 
 
 def latest_calibrated_params() -> V60Params:
@@ -47,38 +52,23 @@ def latest_calibrated_params() -> V60Params:
     回傳目前專案展示用的 calibrated baseline。
 
     What:
-        由 calibrated summary 載入目前首頁使用的主模型參數；
-        若本地存在 measured PSD bins，則一併接入主模型。
+        由正式 calibrated summary 載入目前首頁使用的主模型參數。
 
     Why:
-        compare_*、README 與首頁必須引用同一組展示基準，避免各自硬編碼。
-        repo 目前不保證隨附 measured PSD 檔，因此展示基準必須在缺 bins 時
-        仍能安全退回 calibrated D10-only baseline。
+        compare_*、README 與首頁必須引用同一組展示基準，不允許缺檔時默默回退到舊 baseline。
     """
-    bins_csv = data_dir() / "kinu29_psd_bins.csv"
-    summary_csv = data_dir() / "kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
-    if bins_csv.exists():
-        summary = {}
-        if summary_csv.exists():
-            with summary_csv.open("r", encoding="utf-8", newline="") as f:
-                summary = next(csv.DictReader(f))
-        return V60Params(
-            psd_bins_csv_path=str(bins_csv),
-            D10_measured_m=374.2e-6,
-            h_bed=0.053,
-            T_amb=23.0 + 273.15,
-            k=float(summary.get("k_fit", 8.122875712025124e-11)),
-            k_beta=float(summary.get("k_beta_fit", 1291.7562166952491)),
-            wetbed_impact_tau=2.0,
-            throat_relief_gain=0.58,
-            wetbed_struct_gain=float(summary.get("wetbed_struct_gain_fit", 0.0)),
-            wetbed_struct_rate=float(summary.get("wetbed_struct_rate_fixed", summary.get("wetbed_struct_rate_fit", 0.0))),
-            wetbed_impact_release_rate=float(summary.get("wetbed_impact_release_rate_fixed", 0.0)),
-            pref_flow_coeff=float(summary.get("pref_flow_coeff_fit", 0.0)),
-            pref_flow_open_rate=float(summary.get("pref_flow_open_rate_fixed", summary.get("pref_flow_open_rate_fit", 0.0))),
-            pref_flow_tau_decay=float(summary.get("pref_flow_tau_decay_fixed", summary.get("pref_flow_tau_decay_fit", 5.0))),
-        )
-    return V60Params()
+    case_dir = measured_case_dir()
+    flow_csv = case_dir / "kinu29_light_20g_flow_profile.csv"
+    summary_csv = case_dir / "kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
+    from .benchmark import _load_measured_benchmark_state
+
+    params_fit, _ = _load_measured_benchmark_state(
+        flow_csv,
+        summary_csv,
+        refit=False,
+        verbose=False,
+    )
+    return params_fit
 
 
 def scaled_grind_params(scale: float) -> V60Params:

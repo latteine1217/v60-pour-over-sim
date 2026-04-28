@@ -12,8 +12,63 @@ Why:
 
 import numpy as np
 
-from .measured_io import MEASURED_AMBIENT_TEMP_C
 from .params import PourProtocol
+
+
+def _contact_path_temperature_C(
+    t: np.ndarray,
+    T_effluent_C: np.ndarray,
+    T_dripper_C: np.ndarray,
+    *,
+    tau_s: float,
+    contact_weight: float,
+) -> np.ndarray:
+    """
+    What: 建立側邊慢滲 / apex contact path 的熱歷史。
+    Why:  慢滲路徑會沿濾紙與錐底接觸區匯流，T2 不應只看瞬時 fast effluent。
+    """
+    tau = max(float(tau_s), 1e-6)
+    w_contact = float(np.clip(contact_weight, 0.0, 1.0))
+    target = (1.0 - w_contact) * T_effluent_C + w_contact * T_dripper_C
+    contact = np.empty_like(target)
+    if target.size == 0:
+        return contact
+    contact[0] = target[0]
+    for idx in range(1, len(target)):
+        dt = max(float(t[idx] - t[idx - 1]), 0.0)
+        alpha = 1.0 - np.exp(-dt / tau)
+        contact[idx] = contact[idx - 1] + alpha * (target[idx] - contact[idx - 1])
+    return contact
+
+
+def apex_mixed_temperature_C(results: dict) -> dict[str, np.ndarray]:
+    """
+    What: 用核心水力通道權重計算 T2 apex mixed temperature。
+    Why:  通道效應同時屬於流與熱；observation layer 必須使用 flow model 暴露的同一個權重。
+    """
+    t = np.asarray(results["t"], dtype=float)
+    T_effluent = np.asarray(results.get("T_effluent_C", results["T_C"]), dtype=float)
+    T_dripper = np.asarray(results.get("T_dripper_C", T_effluent), dtype=float)
+    if T_dripper.shape != T_effluent.shape:
+        raise ValueError("T_dripper_C 與 T_effluent_C shape 不一致，無法計算 apex mixed temperature")
+    fast_weight = np.asarray(results.get("apex_fast_weight", np.ones_like(T_effluent)), dtype=float)
+    if fast_weight.shape != T_effluent.shape:
+        raise ValueError("apex_fast_weight 與 T_effluent_C shape 不一致，無法計算 apex mixed temperature")
+
+    contact = _contact_path_temperature_C(
+        t,
+        T_effluent,
+        T_dripper,
+        tau_s=float(results.get("apex_contact_tau_s", 6.0)),
+        contact_weight=float(results.get("apex_contact_weight", 0.35)),
+    )
+    fast_weight = np.clip(fast_weight, 0.0, 1.0)
+    mixed = fast_weight * T_effluent + (1.0 - fast_weight) * contact
+    return {
+        "T_contact_path_C": contact,
+        "T_apex_mixed_C": mixed,
+        "apex_fast_weight": fast_weight,
+    }
 
 
 def mixed_cup_temperature_C(
@@ -37,7 +92,7 @@ def mixed_cup_temperature_C(
             return float(T_server[-1])
     t = np.asarray(results["t"], dtype=float)
     q_out_mlps = np.asarray(results["q_out_mlps"], dtype=float)
-    T_out_C = np.asarray(results["T_C"], dtype=float)
+    T_out_C = np.asarray(results.get("T_apex_mixed_C", results.get("T_effluent_C", results["T_C"])), dtype=float)
     dt = np.diff(t, prepend=t[0])
     cup_volume_ml = float(np.sum(q_out_mlps * dt))
     if cup_volume_ml <= 0:
@@ -94,8 +149,16 @@ def apply_outflow_lag(
     tau = max(float(tau_lag_s), 1e-6)
     t = np.asarray(results["t"], dtype=float)
     q_src = np.asarray(results["q_out_mlps"], dtype=float)
-    T_src = np.asarray(results["T_C"], dtype=float)
-    ambient_C = MEASURED_AMBIENT_TEMP_C if ambient_temp_C is None else float(ambient_temp_C)
+    apex_mix = apex_mixed_temperature_C(results)
+    T_effluent = np.asarray(results.get("T_effluent_C", results["T_C"]), dtype=float)
+    T_src = np.asarray(apex_mix["T_apex_mixed_C"], dtype=float)
+    if ambient_temp_C is None:
+        raw_ambient = results.get("ambient_temp_C")
+        if raw_ambient is None:
+            raise ValueError("apply_outflow_lag 需要 ambient_temp_C；不再支援固定 23°C 默認值")
+        ambient_C = float(raw_ambient)
+    else:
+        ambient_C = float(ambient_temp_C)
     server_lambda = float(results.get("lambda_server_ambient", 0.0) if lambda_server_ambient is None else lambda_server_ambient)
     vessel_eq = max(float(vessel_equivalent_ml), 0.0)
 
@@ -148,6 +211,10 @@ def apply_outflow_lag(
         "v_cup_ml": v_cup,
         "v_hold_ml": v_hold,
         "T_cup_C": T_cup,
+        "T_effluent_C": T_effluent,
+        "T_contact_path_C": apex_mix["T_contact_path_C"],
+        "T_apex_mixed_C": T_src,
+        "apex_fast_weight": apex_mix["apex_fast_weight"],
         "v_server_ml": v_server,
         "T_server_C": T_server,
         "vessel_equivalent_ml": vessel_eq,
