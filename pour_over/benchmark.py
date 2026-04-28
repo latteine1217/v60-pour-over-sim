@@ -20,7 +20,7 @@ from .fitting import (
     evaluate_measured_flow_fit,
     fit_measured_benchmark,
 )
-from .measured_io import load_flow_profile_csv, _measured_setup_overrides
+from .measured_io import load_flow_profile_csv, _measured_setup_overrides, measured_case_psd_bins_path
 from .params import V60Params, RoastProfile
 
 
@@ -35,23 +35,25 @@ def _load_measured_benchmark_state(
     取得 measured benchmark 的目前校準狀態。
 
     What:
-        優先讀取既有 summary CSV；若檔案不存在或指定 `refit=True`，
+        讀取正式 measured benchmark 的 calibrated summary；若指定 `refit=True`，
         則直接重跑正式 measured benchmark fitting。
 
     Why:
-        benchmark / identifiability 需要共用同一組 calibrated baseline，
-        但又不能每次都強迫重跑整套 fitting。
+        benchmark / identifiability 必須共用同一組 calibrated baseline，
+        且不允許在 summary 缺失時默默回退到別的 code path。
     """
     flow_path = Path(csv_path) if csv_path is not None else Path(DEFAULT_MEASURED_FLOW_CSV)
     summary_csv = Path(summary_path) if summary_path is not None else Path(DEFAULT_MEASURED_FLOW_FIT_SUMMARY)
 
-    if refit or not summary_csv.exists():
+    if refit:
         return fit_measured_benchmark(
             csv_path=flow_path,
             plot_path=DEFAULT_MEASURED_FLOW_FIT_PLOT,
             summary_path=summary_csv,
             verbose=verbose,
         )
+    if not summary_csv.exists():
+        raise FileNotFoundError(f"缺少 calibrated summary CSV：{summary_csv}")
 
     prof = load_flow_profile_csv(flow_path)
     meta = prof["meta"]
@@ -70,27 +72,24 @@ def _load_measured_benchmark_state(
 
     params_base = V60Params.for_roast(profile)
     measured_overrides = _measured_setup_overrides(meta)
-    measured_overrides["lambda_server_ambient"] = float(
-        summary.get(
-            "server_cooling_lambda_fit",
-            summary.get("lambda_server_ambient", measured_overrides.get("lambda_server_ambient", 0.0)),
-        )
-    )
+    measured_overrides["lambda_server_ambient"] = float(summary["server_cooling_lambda_fit"])
+    bins_csv = measured_case_psd_bins_path(flow_path)
     params_fit = dataclasses.replace(
         params_base,
         dose_g=float(meta["dose_g"]),
         h_bed=float(meta["bed_height_cm"]) / 100.0,
         T_brew=float(meta["brew_temp_C"]) + 273.15,
+        psd_bins_csv_path=str(bins_csv),
         k=float(summary["k_fit"]),
         k_beta=float(summary["k_beta_fit"]),
-        wetbed_struct_gain=float(summary.get("wetbed_struct_gain_fit", 0.0)),
-        wetbed_struct_rate=float(summary.get("wetbed_struct_rate_fixed", summary.get("wetbed_struct_rate_fit", 0.0))),
-        wetbed_impact_release_rate=float(summary.get("wetbed_impact_release_rate_fixed", 0.0)),
-        pref_flow_coeff=float(summary.get("pref_flow_coeff_fit", 0.0)),
-        pref_flow_open_rate=float(summary.get("pref_flow_open_rate_fixed", summary.get("pref_flow_open_rate_fit", 0.0))),
-        pref_flow_tau_decay=float(summary.get("pref_flow_tau_decay_fixed", summary.get("pref_flow_tau_decay_fit", params_base.pref_flow_tau_decay))),
-        sat_rel_perm_residual=float(summary.get("sat_rel_perm_residual_fit", params_base.sat_rel_perm_residual)),
-        sat_rel_perm_exp=float(summary.get("sat_rel_perm_exp_fit", params_base.sat_rel_perm_exp)),
+        wetbed_struct_gain=float(summary["wetbed_struct_gain_fit"]),
+        wetbed_struct_rate=float(summary["wetbed_struct_rate_fixed"]),
+        wetbed_impact_release_rate=float(summary["wetbed_impact_release_rate_fixed"]),
+        pref_flow_coeff=float(summary["pref_flow_coeff_fit"]),
+        pref_flow_open_rate=float(summary["pref_flow_open_rate_fixed"]),
+        pref_flow_tau_decay=float(summary["pref_flow_tau_decay_fixed"]),
+        sat_rel_perm_residual=float(summary["sat_rel_perm_residual_fit"]),
+        sat_rel_perm_exp=float(summary["sat_rel_perm_exp_fit"]),
         **measured_overrides,
     )
     tau_lag_s = float(summary["tau_lag_s"])
@@ -108,27 +107,24 @@ def _load_measured_benchmark_state(
         "mixed_cup_temp_C": eval_info["mixed_cup_temp_C"],
         "stop_flow_time_s": eval_info["stop_flow_time_s"],
         "tau_lag_s": tau_lag_s,
-        "axial_node_count": int(getattr(params_fit, "axial_node_count", 1)),
-        "sat_rel_perm_residual_fit": float(getattr(params_fit, "sat_rel_perm_residual", params_base.sat_rel_perm_residual)),
-        "sat_rel_perm_exp_fit": float(getattr(params_fit, "sat_rel_perm_exp", params_base.sat_rel_perm_exp)),
+        "axial_node_count": int(params_fit.axial_node_count),
+        "sat_rel_perm_residual_fit": float(params_fit.sat_rel_perm_residual),
+        "sat_rel_perm_exp_fit": float(params_fit.sat_rel_perm_exp),
         "k_fit": float(params_fit.k),
         "k_beta_fit": float(params_fit.k_beta),
         "wetbed_struct_gain_fit": float(params_fit.wetbed_struct_gain),
         "wetbed_struct_rate_fit": float(params_fit.wetbed_struct_rate),
-        "wetbed_struct_rate_fixed": float(summary.get("wetbed_struct_rate_fixed", params_fit.wetbed_struct_rate)),
+        "wetbed_struct_rate_fixed": float(summary["wetbed_struct_rate_fixed"]),
         "wetbed_impact_release_rate_fixed": float(params_fit.wetbed_impact_release_rate),
         "fit_wetbed_structure": True,
-        "fit_preferential_flow": (
-            summary.get("fit_preferential_flow", "False") in ("True", "true", True)
-            or float(summary.get("pref_flow_coeff_fit", 0.0)) > 0.0
-        ),
+        "fit_preferential_flow": summary["fit_preferential_flow"] in ("True", "true", True),
         "pref_flow_coeff_fit": float(params_fit.pref_flow_coeff),
         "pref_flow_open_rate_fit": float(params_fit.pref_flow_open_rate),
         "pref_flow_tau_decay_fit": float(params_fit.pref_flow_tau_decay),
-        "pref_flow_open_rate_fixed": float(summary.get("pref_flow_open_rate_fixed", params_fit.pref_flow_open_rate)),
-        "pref_flow_tau_decay_fixed": float(summary.get("pref_flow_tau_decay_fixed", params_fit.pref_flow_tau_decay)),
-        "fit_server_cooling": summary.get("fit_server_cooling", "False") in ("True", "true", True),
-        "server_cooling_lambda_fit": float(summary.get("server_cooling_lambda_fit", getattr(params_fit, "lambda_server_ambient", 0.0))),
+        "pref_flow_open_rate_fixed": float(summary["pref_flow_open_rate_fixed"]),
+        "pref_flow_tau_decay_fixed": float(summary["pref_flow_tau_decay_fixed"]),
+        "fit_server_cooling": summary["fit_server_cooling"] in ("True", "true", True),
+        "server_cooling_lambda_fit": float(summary["server_cooling_lambda_fit"]),
         "total_loss": eval_info["total_loss"],
     }
     return params_fit, info

@@ -43,9 +43,11 @@ from .fitting import (
     fit_measured_benchmark,
     generate_measured_flow_fit_artifacts,
     evaluate_measured_flow_fit,
+    evaluate_measured_thermal_profile,
     save_fit_summary_csv,
     save_flow_fit_summary_csv,
     plot_flow_fit_comparison,
+    plot_measured_thermal_profile_comparison,
     demo_fitting,
 )
 from .psd import (
@@ -83,9 +85,10 @@ __all__ = [
     "mixed_cup_temperature_C", "observed_stop_time_from_layer", "fit_vessel_equivalent_ml",
     "fit_brew_log_final_temp", "fit_k_kbeta_from_flow_profile",
     "fit_measured_benchmark", "evaluate_measured_flow_fit",
+    "evaluate_measured_thermal_profile",
     "generate_measured_flow_fit_artifacts",
     "save_fit_summary_csv", "save_flow_fit_summary_csv",
-    "plot_flow_fit_comparison",
+    "plot_flow_fit_comparison", "plot_measured_thermal_profile_comparison",
     "demo_fitting",
     # PSD
     "load_psd_raw_csv", "load_psd_stats_csv",

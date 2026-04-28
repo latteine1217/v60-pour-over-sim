@@ -4,7 +4,7 @@ V60 手沖咖啡 ODE 模擬引擎
 此模組為核心數值積分引擎，實作 V60 動態 ODE 系統的求解與結果後處理。
 
 核心狀態向量：
-    state = [h, V_out, V_bed, V_poured, sat, extraction axial bins..., T, T_dripper, chi_struct, xi_pref]
+    state = [h, V_out, V_bed, V_poured, V_liq, sat, extraction axial bins..., T, T_dripper, chi_struct, xi_pref]
 
 主要函式：
     simulate_brew()  — 數值積分 ODE，回傳完整時序結果 dict
@@ -16,6 +16,77 @@ from scipy.integrate import solve_ivp
 from scipy.interpolate import interp1d
 
 from .params import V60Params, PourProtocol, RHO, G, H_MIN, R_GAS
+
+
+def _pour_segments_from_q_in(t: np.ndarray, q_in_mlps: np.ndarray) -> list[tuple[float, float]]:
+    """
+    What: 從注水流量序列找出 recipe pour segments。
+    Why:  通道釋放應綁到 recipe/flow event，而不是固定秒數。
+    """
+    if q_in_mlps.size == 0:
+        return []
+    threshold = max(0.25, 0.10 * float(np.max(q_in_mlps)))
+    active = np.asarray(q_in_mlps, dtype=float) > threshold
+    segments: list[tuple[float, float]] = []
+    start_idx: int | None = None
+    for idx, is_active in enumerate(active):
+        if is_active and start_idx is None:
+            start_idx = idx
+        elif not is_active and start_idx is not None:
+            segments.append((float(t[start_idx]), float(t[max(idx - 1, start_idx)])))
+            start_idx = None
+    if start_idx is not None:
+        segments.append((float(t[start_idx]), float(t[-1])))
+    return segments
+
+
+def _between_pours_release_time_s(
+    t: np.ndarray,
+    q_in_mlps: np.ndarray,
+    q_transport_mlps: np.ndarray,
+) -> float:
+    """
+    What: 找出第一段 bloom 注水後、下一段注水前的通道釋放事件時間。
+    Why:  H4c 診斷指出 between-pours event 比固定秒數更像實際通道恢復。
+    """
+    segments = _pour_segments_from_q_in(t, q_in_mlps)
+    if len(segments) >= 2:
+        return 0.5 * (segments[0][1] + segments[1][0])
+
+    fallback_start = 25.0
+    after = np.asarray(t, dtype=float) >= fallback_start
+    q_after = np.asarray(q_transport_mlps, dtype=float)[after]
+    if q_after.size:
+        target = 0.5 * float(np.max(q_after))
+        idx = np.where(after & (np.asarray(q_transport_mlps, dtype=float) >= target))[0]
+        if idx.size:
+            return float(t[idx[0]])
+    return fallback_start
+
+
+def _apex_fast_weight(
+    t: np.ndarray,
+    q_in_mlps: np.ndarray,
+    q_transport_mlps: np.ndarray,
+    liq_transport_gate: np.ndarray,
+    *,
+    mode: str,
+    release_tau_s: float,
+) -> np.ndarray:
+    """
+    What: 將床內有效 transport flow 拆成 fast apex channel 與 side seepage 的權重。
+    Why:  手沖 bloom 期不是均勻塞流；通道建立後，T2 會混合快速穿透液與側邊慢滲液。
+    """
+    gate = np.clip(np.asarray(liq_transport_gate, dtype=float), 0.0, 1.0)
+    if mode == "liq_transport_gate":
+        return gate
+    if mode != "dual_path_between_pours":
+        raise ValueError(f"未知 apex_channel_mode：{mode}")
+
+    tau = max(float(release_tau_s), 1e-6)
+    release_t = _between_pours_release_time_s(t, q_in_mlps, q_transport_mlps)
+    release = 1.0 / (1.0 + np.exp(-(np.asarray(t, dtype=float) - release_t) / tau))
+    return np.clip(np.maximum(gate, release), 0.0, 1.0)
 
 
 def simulate_brew(
@@ -31,7 +102,7 @@ def simulate_brew(
     數值積分 V60 動態 ODE 系統（bin-resolved 萃取 + 軸向梯度 + 動態潤濕 + 濕床結構記憶 + 濾杯熱節點）。
 
     What:
-          基礎狀態固定為 [h, V_out, V_bed, V_poured, sat]；
+          基礎狀態固定為 [h, V_out, V_bed, V_poured, V_liq, sat]；
           measured PSD bins 啟用時，接著是每個 axial layer × bin 的：
           [C_fast_ij, M_fast_ij, C_slow_ij, M_slow_ij]；
           最後接 [T, T_dripper, chi_struct, xi_pref]。
@@ -52,32 +123,37 @@ def simulate_brew(
     layer_frac_col = layer_frac[:, None]
     M_fast_0_layers = layer_frac_col * np.asarray(params.M_fast_0_bins, dtype=float)[None, :]
     M_slow_0_layers = layer_frac_col * np.asarray(params.M_slow_0_bins, dtype=float)[None, :]
-    c_fast_slice = slice(5, 5 + n_axial)
-    m_fast_slice = slice(5 + n_axial, 5 + 2 * n_axial)
-    c_slow_slice = slice(5 + 2 * n_axial, 5 + 3 * n_axial)
-    m_slow_slice = slice(5 + 3 * n_axial, 5 + 4 * n_axial)
-    T_idx = 5 + 4 * n_axial
-    T_dripper_idx = T_idx + 1
-    chi_idx = T_idx + 2
-    pref_idx = T_idx + 3
+    c_fast_slice = slice(6, 6 + n_axial)
+    m_fast_slice = slice(6 + n_axial, 6 + 2 * n_axial)
+    c_slow_slice = slice(6 + 2 * n_axial, 6 + 3 * n_axial)
+    m_slow_slice = slice(6 + 3 * n_axial, 6 + 4 * n_axial)
+    T_idx = 6 + 4 * n_axial
+    T_effluent_idx = T_idx + 1
+    T_dripper_idx = T_idx + 2
+    chi_idx = T_idx + 3
+    pref_idx = T_idx + 4
 
     def rhs(t, state):
         h = float(state[0])
         V_out = float(state[1])
         V_bed = float(state[2])
         V_poured = float(state[3])
-        sat = float(state[4])
+        V_liq = float(state[4])
+        sat = float(state[5])
         C_fast_layers = np.maximum(np.asarray(state[c_fast_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
         M_fast_layers = np.maximum(np.asarray(state[m_fast_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
         C_slow_layers = np.maximum(np.asarray(state[c_slow_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
         M_slow_layers = np.maximum(np.asarray(state[m_slow_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
         T = float(state[T_idx])
+        T_effluent = float(state[T_effluent_idx])
         T_dripper = float(state[T_dripper_idx])
         chi_struct = float(state[chi_idx])
         xi_pref = float(state[pref_idx])
         h      = max(h, H_MIN)
+        V_liq = float(np.clip(V_liq, 0.0, params.V_liquid))
         sat    = float(np.clip(sat, 0.0, 1.0))
         T      = float(np.clip(T, params.T_amb, params.T_brew + 5.0))
+        T_effluent = float(np.clip(T_effluent, params.T_amb, params.T_brew + 5.0))
         T_dripper = float(np.clip(T_dripper, params.T_amb - 5.0, params.T_brew + 5.0))
         chi_struct = float(np.clip(chi_struct, 0.0, 1.0))
         xi_pref = float(np.clip(xi_pref, 0.0, 1.0))
@@ -140,9 +216,27 @@ def simulate_brew(
 
         # 只有 bloom 的乾粉潤濕期，注水才會被 sat 節流；之後視為已浸濕床層。
         Q_in_free = Q_in * sat_flow
-        dh = (Q_in_free - Q_out) / area
+        gate_h = 1.0 / (1.0 + np.exp(-1000.0 * (h - params.h_bed)))
+        area_eff = area * (gate_h + phi_eff_now * (1.0 - gate_h))
+        dh = (Q_in_free - Q_out) / max(area_eff, 1e-12)
         if h <= H_MIN and dh < 0:
             dh = 0.0
+
+        # 顯式液相庫存 state：
+        # What: 追蹤「會攜帶溶質的床內液相庫存」，並以此 gate solute transport。
+        # Why:  measured case 顯示 hydrodynamic tail 在 `V_liq -> 0` 後仍以 `Q_bed`
+        #       繼續帶走溶質，這不是物理庫存，而是 closure 不一致。
+        #       因此將 transport flow 與 hydraulic flow 拆開：
+        #       `Q_bed` 繼續描述水力尾流，但多層 CSTR 與 TDS 只使用 `Q_bed_transport`。
+        V_liq_gate_ref = max(params.V_liquid * 0.02, 1e-12)
+        liq_transport_gate = V_liq / (V_liq + V_liq_gate_ref)
+        Q_bed_transport = Q_bed * liq_transport_gate
+        dV_liq = (1.0 - gate_h) * (Q_in_free - Q_bed_transport)
+        if V_liq <= 0.0 and dV_liq < 0.0:
+            dV_liq = 0.0
+        if V_liq >= params.V_liquid and dV_liq > 0.0:
+            dV_liq = 0.0
+        V_liq_t = max(V_liq, max(params.V_liquid * 1e-6, 1e-12))
 
         # 修正 [7][11] 多組分萃取（Fast + Slow，Arrhenius 動力學 + 可及性冪次律）
         # 可及性修正：C_eff = C_sat(T) × (M/M₀)^β
@@ -157,8 +251,8 @@ def simulate_brew(
         k_ext_fast_bins = params.k_ext_fast_bins_T(T, t_sec=t)
         k_ext_slow_bins = params.k_ext_slow_bins_T(T, t_sec=t)
         V_liq_conc_layers = np.maximum(
-            params.V_liquid * layer_frac_col,
-            params.V_liquid * 0.05 / max(n_layers, 1),
+            V_liq_t * layer_frac_col,
+            max(params.V_liquid * 1e-6, 1e-12) / max(n_layers, 1),
         )
 
         if params.M_fast_0 > 0:
@@ -188,14 +282,16 @@ def simulate_brew(
         # 各層之間只由 Q_bed 單向帶走濃度，保留 reduced-order 的局部可推理性。
         C_fast_upstream = np.vstack([np.zeros((1, n_bins), dtype=float), C_fast_layers[:-1]])
         C_slow_upstream = np.vstack([np.zeros((1, n_bins), dtype=float), C_slow_layers[:-1]])
-        dC_fast_layers = (dis_fast_layers + Q_bed * (C_fast_upstream - C_fast_layers)) / V_liq_conc_layers
-        dM_fast_layers = -dis_fast_layers * 1e3
-        dC_slow_layers = (dis_slow_layers + Q_bed * (C_slow_upstream - C_slow_layers)) / V_liq_conc_layers
-        dM_slow_layers = -dis_slow_layers * 1e3
 
-        # 瞬時孔隙液體體積（供熱動方程使用）
-        V_liq_t = max(params.phi * (np.pi / 3) * params._tan2 * h**3,
-                      params.V_liquid * 0.05)
+        Q_eff_in = gate_h * Q_bed_transport + (1.0 - gate_h) * Q_in_free
+        cum_frac_in = np.concatenate(([0.0], np.cumsum(layer_frac)[:-1]))
+        Q_in_layers = Q_eff_in - dV_liq * cum_frac_in
+        Q_in_layers_col = Q_in_layers[:, None]
+
+        dC_fast_layers = (dis_fast_layers + Q_in_layers_col * (C_fast_upstream - C_fast_layers)) / V_liq_conc_layers
+        dM_fast_layers = -dis_fast_layers * 1e3
+        dC_slow_layers = (dis_slow_layers + Q_in_layers_col * (C_slow_upstream - C_slow_layers)) / V_liq_conc_layers
+        dM_slow_layers = -dis_slow_layers * 1e3
 
         # 熱動方程（修正 [6]）—— CSTR 焓平衡推導
         # 完整焓平衡：d(V_eff·T)/dt = Q_in·T_brew - Q_out·T - λ·V_eff·(T-T_amb)
@@ -210,15 +306,39 @@ def simulate_brew(
         # 修正：V_equiv_coffee 無論 sat 為何，始終計入熱動方程分母。
         V_eff_T = V_liq_t + params.V_equiv_coffee
         exchange_liq_dripper = params.lambda_liquid_dripper * (T - T_dripper)
+        # `T_effluent` 代表床底即將流出的液體，而不是整床 bulk。
+        # 以最小雙節點熱交換近似，避免直接把 bulk `T` 當成可量測 T2。
+        gate_mode = params.effluent_coupling_gate_mode
+        if gate_mode == "constant":
+            effluent_coupling_gate = 1.0
+        elif gate_mode == "liq_transport_gate":
+            effluent_coupling_gate = liq_transport_gate
+        elif gate_mode == "head_gate":
+            effluent_coupling_gate = gate_h
+        else:
+            raise ValueError(f"未知 effluent_coupling_gate_mode：{gate_mode}")
+        bulk_effluent_exchange = effluent_coupling_gate * params.lambda_liquid_effluent * (T - T_effluent)
+        effluent_dripper_exchange = params.lambda_effluent_dripper * (T_effluent - T_dripper)
         dT = (Q_in / V_eff_T) * (params.T_brew - T) \
              - params.lambda_cool * (T - params.T_amb) \
-             - exchange_liq_dripper
+             - exchange_liq_dripper \
+             - bulk_effluent_exchange
+
+        # startup 階段 cone tip 附近除了流出液，還包含濕潤濾紙與 apex hold-up；
+        # 當 `gate_h -> 1` 形成穩定液柱後，再回到較小的穩態 effluent 熱容。
+        effluent_holdup_scale = 0.08 + 0.32 * (1.0 - gate_h)
+        V_effluent_T = np.clip(V_liq_t * effluent_holdup_scale, 1.0e-6, 2.0e-5)
+        advective_effluent_refresh = (Q_bed_transport / max(V_effluent_T, 1e-12)) * (T - T_effluent)
+        dT_effluent = advective_effluent_refresh + bulk_effluent_exchange - effluent_dripper_exchange
 
         if params.V_equiv_dripper > 0.0:
             dT_dripper = (
                 params.lambda_liquid_dripper
                 * (V_eff_T / max(params.V_equiv_dripper, 1e-12))
                 * (T - T_dripper)
+                + params.lambda_effluent_dripper
+                * (V_effluent_T / max(params.V_equiv_dripper, 1e-12))
+                * (T_effluent - T_dripper)
                 - params.lambda_dripper_ambient * (T_dripper - params.T_amb)
             )
         else:
@@ -241,30 +361,25 @@ def simulate_brew(
         )
 
         return np.concatenate((
-            np.array([dh, Q_out, Q_bed, Q_in, dsat], dtype=float),
+            np.array([dh, Q_out, Q_bed, Q_in, dV_liq, dsat], dtype=float),
             dC_fast_layers.reshape(-1),
             dM_fast_layers.reshape(-1),
             dC_slow_layers.reshape(-1),
             dM_slow_layers.reshape(-1),
-            np.array([dT, dT_dripper, dchi_struct, dxi_pref], dtype=float),
+            np.array([dT, dT_effluent, dT_dripper, dchi_struct, dxi_pref], dtype=float),
         ))
 
     t_eval = np.linspace(0, t_end, n_eval)
-    # 初始熱衝擊溫度
-    V_bloom   = protocol.first_pour_volume_ml() * 1e-6
-    m_w_bloom = V_bloom * RHO
-    m_coffee  = params.dose_g * 1e-3
-    CP_W      = 4180.0
-    T_shock   = (m_w_bloom * CP_W * params.T_brew + m_coffee * params.Cp_coffee * params.T_amb) \
-                / (m_w_bloom * CP_W + m_coffee * params.Cp_coffee)
-
+    # 所有固體與液體熱節點都從室溫開始；第一注注水應由 ODE 自己把系統加熱起來，
+    # 不再用預混 `T_shock` 直接跳到第一注後狀態。
+    # `T_effluent` 對應 cone apex 量測點；初始時該位置仍是冷的濾紙/濾杯頂點。
     y0 = np.concatenate((
-        np.array([H_MIN, 0.0, 0.0, 0.0, 0.0], dtype=float),
+        np.array([H_MIN, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=float),
         np.zeros(n_axial, dtype=float),
         M_fast_0_layers.reshape(-1),
         np.zeros(n_axial, dtype=float),
         M_slow_0_layers.reshape(-1),
-        np.array([T_shock, params.T_amb, 0.0, 0.0], dtype=float),
+        np.array([params.T_amb, params.T_amb, params.T_amb, 0.0, 0.0], dtype=float),
     ))
 
     sol = solve_ivp(
@@ -288,7 +403,8 @@ def simulate_brew(
     V_out    = sol.y[1]
     V_bed    = sol.y[2]
     V_poured = sol.y[3]
-    sat_state = np.clip(sol.y[4], 0.0, 1.0)
+    V_liq_series = np.clip(sol.y[4], 0.0, params.V_liquid)
+    sat_state = np.clip(sol.y[5], 0.0, 1.0)
     sat      = np.where(t < t_bloom_end, sat_state, 1.0)
     C_fast_layers = np.maximum(sol.y[c_fast_slice], 0.0).reshape(n_layers, n_bins, -1)
     M_fast_layers = np.maximum(sol.y[m_fast_slice], 0.0).reshape(n_layers, n_bins, -1)
@@ -305,10 +421,11 @@ def simulate_brew(
     C_bed_top = np.sum(C_fast_layers[0] + C_slow_layers[0], axis=0)
     C_bed_bottom = np.sum(C_fast_layers[-1] + C_slow_layers[-1], axis=0)
     T_K      = np.clip(sol.y[T_idx], params.T_amb, params.T_brew + 5.0)  # [K]
+    T_effluent_K = np.clip(sol.y[T_effluent_idx], params.T_amb, params.T_brew + 5.0)
     T_dripper_K = np.clip(sol.y[T_dripper_idx], params.T_amb - 5.0, params.T_brew + 5.0)
     chi_struct = np.clip(sol.y[chi_idx], 0.0, 1.0)
     xi_pref = np.clip(sol.y[pref_idx], 0.0, 1.0)
-    M_sol    = M_fast + M_slow             # 向後相容：總剩餘固相
+    M_sol    = M_fast + M_slow             # 總剩餘固相
 
     q_in_raw = np.array([protocol.pour_rate(ti) for ti in t])
     sat_flow_arr = np.array([params.flow_saturation(float(si), float(ti), t_bloom_end) for si, ti in zip(sat, t)])
@@ -364,6 +481,21 @@ def simulate_brew(
     q_bed = q_ext + q_pref
     q_bp   = params.q_bypass(h, psi_vals, T_K)
     q_out  = q_bed + q_bp
+    V_liq_gate_ref = max(params.V_liquid * 0.02, 1e-12)
+    liq_transport_gate = V_liq_series / (V_liq_series + V_liq_gate_ref)
+    q_bed_transport = q_bed * liq_transport_gate
+    q_bed_transport_mlps = q_bed_transport * 1e6
+    apex_fast_weight = _apex_fast_weight(
+        t,
+        q_in_raw * 1e6,
+        q_bed_transport_mlps,
+        liq_transport_gate,
+        mode=params.apex_channel_mode,
+        release_tau_s=params.apex_channel_release_tau_s,
+    )
+    # 通道拆分只分解床內有效 transport flow；總出流、萃取與質量守恆仍由 q_bed_transport 控制。
+    q_fast_apex = q_bed_transport * apex_fast_weight
+    q_side_seepage = q_bed_transport - q_fast_apex
     phi_eff_arr = np.array([params.phi_effective(sf, hi) for sf, hi in zip(sat_flow_arr, h)])
     u_pore = np.where(q_bed > 1e-12, q_bed / np.maximum(area_arr * phi_eff_arr, 1e-12), 0.0)
     fine_drag = np.abs(u_pore) * np.array([params.mu_water(Ti) for Ti in T_K]) * params.fine_radius()
@@ -392,7 +524,7 @@ def simulate_brew(
         dominant_bloom_choke = "n/a"
 
     # ── TDS 後處理（多組分）──────────────────────────────────────────────────
-    C_bed = C_fast + C_slow    # 總粉層濃度（用於向後相容 plot_tds/compare_corrections）
+    C_bed = C_fast + C_slow    # 總粉層濃度
 
     # 各組分有效 C_sat（後處理向量化）
     _mf_safe = params.M_fast_0 if params.M_fast_0 > 0 else 1e-10
@@ -404,11 +536,11 @@ def simulate_brew(
 
     # 下壺瞬時濃度（旁路稀釋後）
     C_bed_out = C_fast_out + C_slow_out
-    C_out = np.where(q_out > 1e-12, q_bed * C_bed_out / _q_out_safe, 0.0)
+    C_out = np.where(q_out > 1e-12, q_bed_transport * C_bed_out / _q_out_safe, 0.0)
 
     # 累積萃取質量（各組分 + 總計）
-    M_fast_ext_g  = np.cumsum(dt * q_bed * C_fast_out) * 1e3
-    M_slow_ext_g  = np.cumsum(dt * q_bed * C_slow_out) * 1e3
+    M_fast_ext_g  = np.cumsum(dt * q_bed_transport * C_fast_out) * 1e3
+    M_slow_ext_g  = np.cumsum(dt * q_bed_transport * C_slow_out) * 1e3
     M_extracted_g = M_fast_ext_g + M_slow_ext_g
 
     # 累積 TDS
@@ -426,6 +558,19 @@ def simulate_brew(
 
     # EY（已溶出）
     M_dissolved_g    = params.M_sol_0 - M_sol
+    # 守恆審計：已溶出 = 入杯 + 床內液相庫存。
+    # Why: 這次 draw-down closure 改動直接碰到層內對流與動態液體體積，
+    #      必須讓主模型自己暴露殘差，避免把 phantom dilution 只換成另一種隱性漏帳。
+    V_liq_t_series = np.asarray(V_liq_series, dtype=float)
+    V_liq_layer_series = np.maximum(
+        V_liq_t_series[None, None, :] * layer_frac[:, None, None],
+        max(params.V_liquid * 1e-6, 1e-12) / max(n_layers, 1),
+    )
+    M_liquid_inventory_g = np.sum(
+        (C_fast_layers + C_slow_layers) * V_liq_layer_series,
+        axis=(0, 1),
+    ) * 1e3
+    M_balance_residual_g = M_dissolved_g - M_extracted_g - M_liquid_inventory_g
     EY_dissolved_pct = M_dissolved_g * _ey_scale
     EY_pct           = EY_cup_pct
 
@@ -466,6 +611,10 @@ def simulate_brew(
         q_ext_mlps   = q_ext    * 1e6,
         q_pref_mlps  = q_pref   * 1e6,
         q_bed_mlps   = q_bed    * 1e6,
+        q_bed_transport_mlps = q_bed_transport_mlps,
+        apex_fast_weight = apex_fast_weight,
+        q_fast_apex_mlps = q_fast_apex * 1e6,
+        q_side_seepage_mlps = q_side_seepage * 1e6,
         q_bp_mlps    = q_bp     * 1e6,
         q_out_mlps   = q_out    * 1e6,
         k_vals       = k_vals,
@@ -517,6 +666,10 @@ def simulate_brew(
         M_slow_g         = M_slow,
         M_extracted_g    = M_extracted_g,
         M_dissolved_g    = M_dissolved_g,
+        M_liquid_inventory_g = M_liquid_inventory_g,
+        M_balance_residual_g = M_balance_residual_g,
+        V_liq_inventory_ml = V_liq_t_series * 1e6,
+        liq_transport_gate = liq_transport_gate,
         TDS_gl           = TDS_gl,
         TDS_fast_gl      = TDS_fast_gl,
         TDS_slow_gl      = TDS_slow_gl,
@@ -528,8 +681,14 @@ def simulate_brew(
         # 熱力學（修正 [6]）
         T_K              = T_K,
         T_C              = T_K - 273.15,
+        T_effluent_K     = T_effluent_K,
+        T_effluent_C     = T_effluent_K - 273.15,
         T_dripper_K      = T_dripper_K,
         T_dripper_C      = T_dripper_K - 273.15,
+        apex_channel_mode = params.apex_channel_mode,
+        apex_channel_release_tau_s = float(params.apex_channel_release_tau_s),
+        apex_contact_tau_s = float(params.apex_contact_tau_s),
+        apex_contact_weight = float(params.apex_contact_weight),
         lambda_server_ambient = float(getattr(params, "lambda_server_ambient", 0.0)),
     )
 

@@ -2,8 +2,8 @@
 measured_io.py — 量測資料與硬體條件輸入
 
 What:
-    集中管理 measured benchmark 使用的 CSV parsing、metadata fallback、
-    與可直接量測的硬體/環境條件常數。
+    集中管理 measured benchmark 使用的 CSV parsing 與
+    可直接量測的硬體/環境條件常數。
 
 Why:
     量測資料 I/O 與 optimizer / loss 定義無關；把它們從 fitting 主流程拆開，
@@ -20,7 +20,6 @@ from .params import PourProtocol
 
 MEASURED_BED_HEIGHT_CM = 5.3
 MEASURED_VESSEL_EQUIV_ML = 42.4
-MEASURED_AMBIENT_TEMP_C = 23.0
 MEASURED_DRIPPER_MASS_G = 123.5
 MEASURED_DRIPPER_CP_J_GK = 0.88
 MEASURED_LIQUID_DRIPPER_LAMBDA = 0.02
@@ -33,10 +32,11 @@ def _meta_float(meta: dict, key: str, default: float | None = None) -> float:
     從 CSV metadata 取浮點數，必要時回退到預設值。
 
     What:
-        讀取首列 metadata 的數值欄位，空字串或缺值時使用 `default`。
+        讀取首列 metadata 的數值欄位，必要時使用明確給定的 `default`。
 
     Why:
-        量測資料有時只缺單一欄位；集中處理可避免擬合流程散落隱性 fallback。
+        將 metadata parsing 集中在 I/O 層，可讓缺欄位時直接在入口失敗，
+        而不是讓錯誤漂到下游。
     """
     raw = meta.get(key)
     if raw is None or str(raw).strip() == "":
@@ -44,6 +44,35 @@ def _meta_float(meta: dict, key: str, default: float | None = None) -> float:
             raise ValueError(f"CSV metadata 缺少必要欄位：{key}")
         return float(default)
     return float(raw)
+
+
+def _optional_float(row: dict, key: str, default: float | None = None) -> float | None:
+    """
+    讀取可選浮點欄位。
+
+    What:
+        空字串、`~25`、`< 10` 這類手動整理欄位會先做輕量清理，再轉成浮點數。
+
+    Why:
+        手工量測資料常帶近似符號；統一在 I/O 層清理，避免下游重複處理。
+    """
+    raw = row.get(key)
+    if raw is None:
+        return default
+    text = str(raw).strip()
+    if not text:
+        return default
+    cleaned = (
+        text.replace("~", "")
+        .replace("<", "")
+        .replace(">", "")
+        .replace("≈", "")
+        .replace(",", "")
+        .strip()
+    )
+    if not cleaned:
+        return default
+    return float(cleaned)
 
 
 def _measured_setup_overrides(meta: dict) -> dict:
@@ -56,12 +85,12 @@ def _measured_setup_overrides(meta: dict) -> dict:
     Why:
         這些量屬於量測條件或硬體條件，不應每次在擬合內隱性漂移。
     """
-    ambient_C = _meta_float(meta, "ambient_temp_C", MEASURED_AMBIENT_TEMP_C)
-    dripper_mass_g = _meta_float(meta, "dripper_mass_g", MEASURED_DRIPPER_MASS_G)
-    dripper_cp_j_gk = _meta_float(meta, "dripper_cp_J_gK", MEASURED_DRIPPER_CP_J_GK)
-    liquid_dripper_lambda = _meta_float(meta, "lambda_liquid_dripper", MEASURED_LIQUID_DRIPPER_LAMBDA)
-    dripper_ambient_lambda = _meta_float(meta, "lambda_dripper_ambient", MEASURED_DRIPPER_AMBIENT_LAMBDA)
-    server_ambient_lambda = _meta_float(meta, "lambda_server_ambient", MEASURED_SERVER_AMBIENT_LAMBDA)
+    ambient_C = _meta_float(meta, "ambient_temp_C")
+    dripper_mass_g = _meta_float(meta, "dripper_mass_g")
+    dripper_cp_j_gk = _meta_float(meta, "dripper_cp_J_gK")
+    liquid_dripper_lambda = _meta_float(meta, "lambda_liquid_dripper")
+    dripper_ambient_lambda = _meta_float(meta, "lambda_dripper_ambient")
+    server_ambient_lambda = _meta_float(meta, "lambda_server_ambient")
     return {
         "T_amb": ambient_C + 273.15,
         "dripper_mass_g": dripper_mass_g,
@@ -70,6 +99,27 @@ def _measured_setup_overrides(meta: dict) -> dict:
         "lambda_dripper_ambient": dripper_ambient_lambda,
         "lambda_server_ambient": server_ambient_lambda,
     }
+
+
+def measured_case_psd_bins_path(csv_path: str | Path) -> Path:
+    """
+    由 measured case 的 CSV 路徑定位同目錄下的 PSD bins artifact。
+
+    What:
+        將 `*_flow_profile.csv` 或 `*_thermal_profile.csv` 映射到同 case 目錄內的
+        `kinu29_psd_bins.csv`。
+
+    Why:
+        measured case 已從單一路徑擴展為多批次資料；PSD artifact 解析必須跟著 case
+        走，不能再硬編碼到 `4:11`。
+    """
+    case_dir = Path(csv_path).resolve().parent
+    candidates = sorted(case_dir.glob("*_psd_bins.csv"))
+    if len(candidates) != 1:
+        raise FileNotFoundError(
+            f"無法唯一定位 measured PSD bins CSV：{case_dir}（找到 {len(candidates)} 個候選）"
+        )
+    return candidates[0]
 
 
 def load_brew_log_csv(csv_path: str | Path) -> tuple[list[dict], dict]:
@@ -107,6 +157,39 @@ def load_flow_profile_csv(csv_path: str | Path) -> dict:
     use_for_fit = np.array([int(r.get("use_for_fit", "1")) for r in rows], dtype=int)
     phases = [r.get("phase", "") for r in rows]
     final_cup_temp_C = float(meta["final_coffee_temp_C"]) if meta.get("final_coffee_temp_C") else None
+    final_tds_pct = _optional_float(meta, "final_tds_pct")
+    est_server_volume_ml = np.array(
+        [
+            np.nan if _optional_float(r, "estimated_server_volume_ml") is None
+            else float(_optional_float(r, "estimated_server_volume_ml"))
+            for r in rows
+        ],
+        dtype=float,
+    )
+    server_temp_C = np.array(
+        [
+            np.nan if _optional_float(r, "server_temp_C") is None
+            else float(_optional_float(r, "server_temp_C"))
+            for r in rows
+        ],
+        dtype=float,
+    )
+    outflow_temp_C = np.array(
+        [
+            np.nan if _optional_float(r, "outflow_temp_C") is None
+            else float(_optional_float(r, "outflow_temp_C"))
+            for r in rows
+        ],
+        dtype=float,
+    )
+    server_temp_use_for_fit = np.array(
+        [int(r.get("server_temp_use_for_fit", "0")) for r in rows],
+        dtype=int,
+    )
+    outflow_temp_use_for_fit = np.array(
+        [int(r.get("outflow_temp_use_for_fit", "0")) for r in rows],
+        dtype=int,
+    )
 
     stop_flow_time_s = None
     for row in rows:
@@ -125,8 +208,50 @@ def load_flow_profile_csv(csv_path: str | Path) -> dict:
         "use_for_fit": use_for_fit,
         "phase": phases,
         "final_cup_temp_C": final_cup_temp_C,
+        "final_tds_pct": final_tds_pct,
+        "estimated_server_volume_ml": est_server_volume_ml,
+        "server_temp_C": server_temp_C,
+        "outflow_temp_C": outflow_temp_C,
+        "server_temp_use_for_fit": server_temp_use_for_fit,
+        "outflow_temp_use_for_fit": outflow_temp_use_for_fit,
         "stop_flow_time_s": stop_flow_time_s,
     }
+
+
+def resolve_measured_ambient_temp_C(profile: dict) -> float:
+    """
+    解析 measured case 應使用的室溫。
+
+    What:
+        優先使用 CSV metadata 的 `ambient_temp_C`；若缺值，則退回 `t=0`
+        的量測溫度（優先 `server_temp_C`，其次 `outflow_temp_C`）。
+
+    Why:
+        室溫應來自當次量測，而不是硬編碼常數。若資料既沒有 metadata、
+        也沒有可作為 `t=0` 室溫的溫度觀測，應立即失敗。
+    """
+    meta = profile.get("meta", {})
+    raw_ambient = meta.get("ambient_temp_C")
+    if raw_ambient is not None and str(raw_ambient).strip() != "":
+        return float(raw_ambient)
+
+    t_s = np.asarray(profile.get("t_s", []), dtype=float)
+    if t_s.size == 0:
+        raise ValueError("無法解析 ambient_temp_C：缺少時間序列資料")
+    t0_idx = int(np.argmin(t_s))
+
+    for key in ("server_temp_C", "outflow_temp_C"):
+        values = profile.get(key)
+        if values is None:
+            continue
+        arr = np.asarray(values, dtype=float)
+        if arr.size <= t0_idx:
+            continue
+        t0_value = float(arr[t0_idx])
+        if np.isfinite(t0_value):
+            return t0_value
+
+    raise ValueError("無法解析 ambient_temp_C：缺少 metadata，且無可用的 t=0 溫度量測")
 
 
 def protocol_from_brew_log(rows: list[dict]) -> PourProtocol:

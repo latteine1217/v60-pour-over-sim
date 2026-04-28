@@ -9,7 +9,7 @@ This repository now has a layered package structure with two complementary entry
 - `README.md`: installation, package structure, reproducibility, and model boundary
 - `index.html`: visual showcase of the current generated outputs and the main physics stories
 
-The current model is a reduced-order bed-scale simulator. It is designed to compare flow, bypass, thermal regime, and extraction behavior across plausible pour-over conditions, while also supporting calibration against measured `V_in(t)`, `V_out(t)`, grinder PSD, and final cup temperature. The codebase is now explicitly split into fixed physical inputs, tunable reduced-order closures, measured-data I/O, observation-layer transforms, and analysis/showcase entry points. It is not a fully particle-resolved diffusion-advection PDE solver, and its outputs should be read as engineering-model predictions rather than universal ground truth.
+The current model is a reduced-order bed-scale simulator. It is designed to compare flow, bypass, thermal regime, and extraction behavior across plausible pour-over conditions, while also checking the model against measured `V_in(t)`, `V_out(t)`, grinder PSD, and final cup temperature. The codebase is now explicitly split into fixed physical inputs, physically interpretable reduced-order closures, measured-data I/O, observation-layer transforms, and analysis/showcase entry points. It is not a fully particle-resolved diffusion-advection PDE solver, and its outputs should be read as engineering-model predictions rather than universal ground truth. Measured-case fitting is treated as a validation tool for physically defensible closures, not as a license to keep arbitrary parameters solely because they reduce loss.
 
 Primary use cases:
 
@@ -21,7 +21,7 @@ Primary use cases:
 
 ## Physics Model
 
-The current best model uses one dynamic state family:
+The current main model uses one dynamic state family:
 
 ```
 state = [h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct]
@@ -64,7 +64,7 @@ This is a single model family. The repository no longer maintains an older fract
 
 ## Current Calibrated Reference
 
-The current best-fit reference in the repo is based on one measured brew:
+The current calibrated reference in the repo is based on the April 12 measured brew:
 
 - grinder: `Kinu 29`
 - roast: `light`
@@ -73,25 +73,25 @@ The current best-fit reference in the repo is based on one measured brew:
 - ambient: `23°C`
 - dripper: ceramic V60, `123.5 g`
 - server equivalent heat capacity: `42.4 mL water equivalent`
-- measured PSD: raw Kinu 29 export is stored under `data/kinu_29_light/`; model-ready artifacts are `data/kinu29_psd_summary.csv` and `data/kinu29_psd_bins.csv`
-- calibrated fit summary: `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- measured PSD: raw Kinu 29 export is stored under `data/kinu_29_light/4:12/`; model-ready artifacts are `data/kinu_29_light/4:12/kinu29_psd_summary.csv` and `data/kinu_29_light/4:12/kinu29_psd_bins.csv`
+- calibrated fit summary: `data/kinu_29_light/4:12/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
 
-Current fit metrics:
+Current reference metrics:
 
-- `D10 ≈ 374 μm`
+- `D10 ≈ 529 μm`
 - `axial_node_count = 2`
-- `k_fit ≈ 8.44e-11 m²`
-- `k_beta_fit ≈ 1.97e3 m⁻³`
-- `tau_lag ≈ 1.6 s`
-- `wetbed_struct_gain ≈ 0.189`
+- `k_fit ≈ 1.24e-10 m²`
+- `k_beta_fit ≈ 1.25e3 m⁻³`
+- `tau_lag ≈ 0.5 s`
+- `wetbed_struct_gain ≈ 0.176`
 - `wetbed_struct_rate = 0.0607 (fixed)`
 - `wetbed_impact_release_rate = 0.30 (fixed)`
 - `kr(sat)` uses explicit unsaturated Darcy attenuation
-- `pref_flow_coeff = 0` on the current measured fit
-- `server cooling λ ≈ 5.27e-4 s⁻¹`
-- `V_out RMSE ≈ 13.39 mL`
-- `q_out RMSE ≈ 1.24 mL/s`
-- `cup temperature error ≈ +0.05°C`
+- `pref_flow_coeff ≈ 2.64e-4 m²/s`
+- `server cooling λ = 0` on the current measured fit
+- `V_out RMSE ≈ 16.53 mL`
+- `q_out RMSE ≈ 1.40 mL/s`
+- `current benchmark gate = FAIL` under the existing thresholds
 
 ## Roast Profiles
 
@@ -144,28 +144,30 @@ v60_sim.py          # Backward-compatible thin wrapper
 Structure summary:
 
 - `constant.py` holds quantities that should come from measurement or hardware setup, not fitting.
-- `params.py` keeps reduced-order closures and model-control knobs that may be scanned or calibrated.
+- `params.py` keeps reduced-order closures and model-control knobs that may be scanned or calibrated only within physically justified bounds.
 - `core.py` remains the single coupled ODE engine.
 - measured-data ingestion, observation-layer transforms, benchmark, identifiability, and showcase-state loading now live in dedicated modules instead of being folded into a few large files.
 
 ## Data Artifacts
 
-The Kinu 29 PSD data has two layers:
+The current Kinu 29 reference data has two layers:
 
-- raw measurement export: `data/kinu_29_light/kinu29_PSD_export_data.csv` and `data/kinu_29_light/kinu29_PSD_export_data_stats.csv`
-- model-ready artifacts: `data/kinu29_psd_summary.csv` and `data/kinu29_psd_bins.csv`
+- raw measurement export: `data/kinu_29_light/4:12/PSD_export_data.csv` and `data/kinu_29_light/4:12/PSD_export_data_stats.csv`
+- model-ready artifacts: `data/kinu_29_light/4:12/kinu29_psd_summary.csv` and `data/kinu_29_light/4:12/kinu29_psd_bins.csv`
 
 The raw CSV files are the source of truth for particle geometry. The `kinu29_psd_*` CSV files are generated artifacts used by the model and should be regenerated rather than edited by hand:
 
 ```bash
 uv run python -m pour_over.psd \
-  data/kinu_29_light/kinu29_PSD_export_data.csv \
-  --stats-csv data/kinu_29_light/kinu29_PSD_export_data_stats.csv \
-  --output data/kinu29_psd_summary.csv \
-  --bin-output data/kinu29_psd_bins.csv
+  data/kinu_29_light/4:12/PSD_export_data.csv \
+  --stats-csv data/kinu_29_light/4:12/PSD_export_data_stats.csv \
+  --output data/kinu_29_light/4:12/kinu29_psd_summary.csv \
+  --bin-output data/kinu_29_light/4:12/kinu29_psd_bins.csv
 ```
 
-Large source media in `data/kinu_29_light/` such as photos and PDFs are treated as local measurement media and are ignored by `.gitignore`. The CSV export and model-ready CSV artifacts are the reproducible inputs for the simulator.
+Large source media in `data/kinu_29_light/4:12/` such as photos and PDFs are treated as local measurement media and are ignored by `.gitignore`. The CSV export and model-ready CSV artifacts are the reproducible inputs for the simulator.
+
+For measured-case temperature handling, `ambient_temp_C` should come from the brew record itself. If a thermal CSV omits that metadata, the loader now falls back to the `t=0` measured temperature (`server_temp_C` first, then `outflow_temp_C`) instead of silently assuming `23°C`.
 
 ## Usage
 
@@ -190,8 +192,8 @@ from pour_over import V60Params, RoastProfile, PourProtocol, simulate_brew
 
 params = dataclasses.replace(
     V60Params.for_roast(RoastProfile.LIGHT),
-    psd_bins_csv_path="data/kinu29_psd_bins.csv",
-    D10_measured_m=374.2e-6,
+    psd_bins_csv_path="data/kinu_29_light/4:12/kinu29_psd_bins.csv",
+    D10_measured_m=529.3e-6,
     h_bed=0.053,
     T_amb=296.15,
     dripper_mass_g=123.5,
@@ -223,14 +225,15 @@ This command regenerates the main figure set used by the showcase page:
 
 - `data/kinu29_calibrated_flow_diagnostics_180s.png`
 - `data/kinu29_calibrated_extraction_quality_180s.png`
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
+- `data/kinu_29_light/4:12/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
 - `v60_grind.png`
 - `v60_thermal.png`
 
 The measured-fit page also uses:
 
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- `data/kinu_29_light/4:12/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
+- `data/kinu_29_light/4:12/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- `data/kinu_29_light/4:12/kinu29_light_20g_thermal_profile_comparison.png`
 
 ## SCA Golden Cup Targets
 

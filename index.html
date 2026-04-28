@@ -311,24 +311,24 @@ canvas{display:block;width:100%;height:auto}
     </div>
     <div class="hero-summary">
       <div class="hero-kicker">Current Best Fit</div>
-      <div class="hero-lead">Kinu 29, light roast, 20 g, measured PSD, calibrated against real V_in(t) / V_out(t).</div>
-      <div class="hero-note">This is the current reference model: measured D10, split clogging, bin-resolved extraction, and a two-node thermal model with ceramic dripper heat capacity.</div>
+      <div class="hero-lead">Kinu 29, April 12 brew, light roast, 20 g, measured PSD, calibrated against real V_in(t) / V_out(t).</div>
+      <div class="hero-note">This is the current reference model: the April 12 measured brew is now the formal baseline, with measured D10, split clogging, bin-resolved extraction, and a two-node thermal model with ceramic dripper heat capacity.</div>
       <div class="hero-grid">
         <div class="hero-cell">
           <div class="hero-label">Measured D10</div>
-          <div class="hero-value">374 μm</div>
+          <div class="hero-value">529 μm</div>
         </div>
         <div class="hero-cell">
           <div class="hero-label">V RMSE</div>
-          <div class="hero-value">14.5 mL</div>
+          <div class="hero-value">16.5 mL</div>
         </div>
         <div class="hero-cell">
           <div class="hero-label">q RMSE</div>
-          <div class="hero-value">1.26 mL/s</div>
+          <div class="hero-value">1.40 mL/s</div>
         </div>
         <div class="hero-cell">
-          <div class="hero-label">Cup ΔT</div>
-          <div class="hero-value">+3.24°C</div>
+          <div class="hero-label">TDS Δ</div>
+          <div class="hero-value">-0.38%</div>
         </div>
       </div>
     </div>
@@ -360,9 +360,9 @@ canvas{display:block;width:100%;height:auto}
         </div>
         <div class="story-figure">
           <div class="canvas-wrap">
-            <img class="figure-img" src="data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png" alt="Calibrated Kinu 29 flow fit with wet-bed structure">
+            <img class="figure-img" src="data/kinu_29_light/4:12/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png" alt="Calibrated Kinu 29 flow fit with wet-bed structure">
           </div>
-          <div class="figure-note">The lead figure is now the calibrated flow-fit panel: measured poured volume, measured drained volume, interval outflow rate, residuals, and the current hydraulic fit for the Kinu 29 light-roast brew, including the post-bloom wet-bed structure state.</div>
+          <div class="figure-note">The lead figure is now the calibrated flow-fit panel for the April 12 Kinu 29 brew: measured poured volume, measured drained volume, interval outflow rate, residuals, and the current hydraulic fit, including the post-bloom wet-bed structure state.</div>
         </div>
       </div>
     </div>
@@ -654,175 +654,422 @@ canvas{display:block;width:100%;height:auto}
     </div>
   </div>
 
-  <!-- ══ 03  ODE COUPLING MAP ════════════════════════════════════════ -->
+  <!-- ══ 03  MAIN STRUCTURE MAP ══════════════════════════════════════ -->
   <div class="section">
     <div class="section-label">03 &nbsp; System Map</div>
     <div class="panel section-panel">
       <div class="story-copy" style="margin-bottom:16px">
         <div class="eyebrow">Model Architecture</div>
-        <div class="showcase-title" style="font-size:33px">One state trajectory, multiple technical surfaces.</div>
-          <div class="showcase-text">The simulator is built so that flow, thermal, and extraction outputs are all projections of the same coupled ODE state. The difference now is that the extraction block is no longer one pair of lumped pools: the hydraulic state couples to a bin-resolved PSD representation.</div>
-          <div class="tech-grid">
-            <div class="tech-card">
-              <strong>State Layer</strong>
-            `h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct`
-            </div>
-            <div class="tech-card">
-              <strong>Closure Layer</strong>
-            Darcy flow, split clogging, bypass activation, wet-bed capillary head, bin-resolved Noyes-Whitney transport, and two-node thermal coupling.
-            </div>
-            <div class="tech-card">
-              <strong>Output Layer</strong>
-            Brew time, drain time, TDS, in-cup EY, dissolved EY, measured D10 diagnostics, and fast/slow cup balance.
-            </div>
+        <div class="showcase-title" style="font-size:33px">One measured pipeline, one coupled engine, several projection surfaces.</div>
+        <div class="showcase-text">This is the repo's main structure, not a decorative dependency chart. Measured data enters through a strict I/O layer, physically interpretable closures are assembled in <span class="ic">params.py</span>, the full brew evolves inside one coupled ODE in <span class="ic">core.py</span>, and every fit, benchmark, and figure is downstream of that same state trajectory.</div>
+        <div class="tech-grid">
+          <div class="tech-card">
+            <strong>Input Layer</strong>
+            Measured flow, thermal CSV, PSD bins, roast profile, dripper hardware, and ambient metadata are all fixed upstream inputs, not silent optimizer degrees of freedom.
           </div>
+          <div class="tech-card">
+            <strong>Core Layer</strong>
+            `h, V_out, V_bed, V_poured, V_liq, sat, T, T_effluent, T_dripper, chi_struct, xi_pref, {C/M bins × axial layers}` live inside one state update loop.
+          </div>
+          <div class="tech-card">
+            <strong>Projection Layer</strong>
+            Observation lag, server mixing, fitting, benchmark gating, and exported figures are separate surfaces laid on top of the same physical simulation.
+          </div>
+        </div>
       </div>
-    <div class="panel" style="padding:28px;background:var(--surface2);border:1px solid var(--border)">
-      <svg viewBox="0 0 1060 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block">
-        <defs>
-          <marker id="arr" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4a5470"/>
-          </marker>
-          <marker id="arr-c" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4af0c4"/>
-          </marker>
-          <marker id="arr-b" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4a8ff0"/>
-          </marker>
-          <marker id="arr-p" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#a24af0"/>
-          </marker>
-          <marker id="arr-a" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#f0a24a"/>
-          </marker>
-        </defs>
+      <div class="panel" style="padding:24px;background:var(--surface2);border:1px solid var(--border)">
+        <svg id="system-map-svg" viewBox="0 0 1200 640" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block">
+          <defs>
+            <linearGradient id="panelGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#131722"/>
+              <stop offset="100%" stop-color="#0d1018"/>
+            </linearGradient>
+            <linearGradient id="nodeBodyGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#181d28"/>
+              <stop offset="100%" stop-color="#0f131c"/>
+            </linearGradient>
+            <linearGradient id="headerBlue" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#182746"/>
+              <stop offset="100%" stop-color="#10192c"/>
+            </linearGradient>
+            <linearGradient id="headerGreen" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#112822"/>
+              <stop offset="100%" stop-color="#0f1a19"/>
+            </linearGradient>
+            <linearGradient id="headerOrange" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#322012"/>
+              <stop offset="100%" stop-color="#231710"/>
+            </linearGradient>
+            <linearGradient id="headerPurple" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#231537"/>
+              <stop offset="100%" stop-color="#191124"/>
+            </linearGradient>
+            <linearGradient id="headerSlate" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#182030"/>
+              <stop offset="100%" stop-color="#121821"/>
+            </linearGradient>
+            <linearGradient id="groupGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="rgba(22,28,40,0.92)"/>
+              <stop offset="100%" stop-color="rgba(12,16,23,0.72)"/>
+            </linearGradient>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#5b6786"/>
+            </marker>
+            <marker id="arr-c" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#4af0c4"/>
+            </marker>
+            <marker id="arr-b" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#4a8ff0"/>
+            </marker>
+            <marker id="arr-p" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#a24af0"/>
+            </marker>
+            <marker id="arr-a" markerWidth="8" markerHeight="8" refX="5" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 Z" fill="#f0a24a"/>
+            </marker>
+            <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="10" result="blur"/>
+              <feMerge>
+                <feMergeNode in="blur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+            <pattern id="miniGrid" width="24" height="24" patternUnits="userSpaceOnUse">
+              <path d="M 24 0 L 0 0 0 24" fill="none" stroke="rgba(74,143,240,0.06)" stroke-width="1"/>
+            </pattern>
+            <filter id="nodeShadow" x="-20%" y="-20%" width="150%" height="160%">
+              <feDropShadow dx="0" dy="10" stdDeviation="8" flood-color="#000000" flood-opacity="0.34"/>
+            </filter>
+            <filter id="cableGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="2.5" result="blur"/>
+              <feMerge>
+                <feMergeNode in="blur"/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
 
-        <!--
-          Layout (left→right causal flow):
-          Col 1 (x~67):  V_poured  — protocol input
-          Col 2 (x~245): h (top), V_out (bottom)  — fluid state
-          Col 3 (x~432): T  — thermal hub
-          Col 4 (x~612): C_fast (top), M_fast (bottom)  — fast extraction pair
-          Col 5 (x~787): C_slow (top), M_slow (bottom)  — slow extraction pair
-          Col 6 (x~962): TDS (top), EY (bottom)  — derived outputs
-          h→C arcs routed above all nodes (y<55) to avoid crossings with T
-        -->
+          <rect x="0" y="0" width="1200" height="640" fill="url(#miniGrid)" opacity="0.35"/>
 
-        <!-- ── Col 1: Protocol input ── -->
-        <rect x="10" y="90" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
-        <text x="67" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">V_poured</text>
-        <text x="67" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">cumul. input</text>
+          <rect x="18" y="56" width="252" height="520" rx="22" fill="url(#groupGrad)" stroke="#1a2538" stroke-width="1.1" stroke-dasharray="6,6"/>
+          <rect x="292" y="56" width="274" height="520" rx="22" fill="url(#groupGrad)" stroke="#1d2d3f" stroke-width="1.1" stroke-dasharray="6,6"/>
+          <rect x="586" y="56" width="316" height="520" rx="22" fill="url(#groupGrad)" stroke="#253149" stroke-width="1.1" stroke-dasharray="6,6"/>
+          <rect x="922" y="56" width="260" height="520" rx="22" fill="url(#groupGrad)" stroke="#1a2538" stroke-width="1.1" stroke-dasharray="6,6"/>
 
-        <!-- ── Col 2: Fluid state ── -->
-        <rect x="195" y="90" width="100" height="46" rx="2" fill="#111318" stroke="#4af0c4" stroke-width="1.2"/>
-        <text x="245" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600" fill="#4af0c4">h</text>
-        <text x="245" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">water level</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="28" y="20" width="156" height="22" rx="11" fill="#101621" stroke="#263148" stroke-width="1"/>
+            <text x="46" y="35" font-family="IBM Plex Mono,monospace" font-size="10" letter-spacing="1.8" fill="#9aabc9">INPUTS / INGEST</text>
+            <rect x="302" y="20" width="178" height="22" rx="11" fill="#101621" stroke="#263148" stroke-width="1"/>
+            <text x="320" y="35" font-family="IBM Plex Mono,monospace" font-size="10" letter-spacing="1.8" fill="#9aabc9">PHYSICAL CLOSURES</text>
+            <rect x="596" y="20" width="188" height="22" rx="11" fill="#101621" stroke="#263148" stroke-width="1"/>
+            <text x="614" y="35" font-family="IBM Plex Mono,monospace" font-size="10" letter-spacing="1.8" fill="#9aabc9">COUPLED ODE ENGINE</text>
+            <rect x="932" y="20" width="188" height="22" rx="11" fill="#101621" stroke="#263148" stroke-width="1"/>
+            <text x="950" y="35" font-family="IBM Plex Mono,monospace" font-size="10" letter-spacing="1.8" fill="#9aabc9">PROJECTIONS / OUTPUTS</text>
+          </g>
 
-        <rect x="195" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
-        <text x="252" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">V_out</text>
-        <text x="252" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">cumul. output</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="36" y="88" width="216" height="92" rx="16" fill="url(#nodeBodyGrad)" stroke="#4a8ff0" stroke-width="1.55"/>
+            <rect x="36" y="88" width="216" height="28" rx="16" fill="url(#headerBlue)" stroke="#4a8ff0" stroke-width="1.55"/>
+            <rect x="48" y="95" width="44" height="14" rx="7" fill="#0d1420" stroke="#33405f" stroke-width="0.8"/>
+            <text x="70" y="105" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#a9b7d1">CSV</text>
+            <text x="98" y="104" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4a8ff0">measured_io.py</text>
+            <foreignObject x="52" y="126" width="180" height="52">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Flow / Thermal CSV</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">V_in(t), V_out(t), T1, T2, final_tds_pct</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">strict metadata parsing, case-local loading</div>
+              </div>
+            </foreignObject>
+            <circle cx="42" cy="129" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+            <circle class="graph-port" data-port="input-flow-out" data-kind="routing" cx="252" cy="121" r="5.5" fill="#4a8ff0" stroke="#dce8ff" stroke-width="0.9"/>
+            <circle cx="252" cy="139" r="1.5" opacity="0"/>
+          </g>
 
-        <!-- ── Col 3: Thermal hub ── -->
-        <rect x="382" y="128" width="100" height="46" rx="2" fill="#111318" stroke="#f0a24a" stroke-width="1.2"/>
-        <text x="432" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600" fill="#f0a24a">T</text>
-        <text x="432" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">temperature</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="36" y="190" width="216" height="92" rx="16" fill="url(#nodeBodyGrad)" stroke="#4af0c4" stroke-width="1.55"/>
+            <rect x="36" y="190" width="216" height="28" rx="16" fill="url(#headerGreen)" stroke="#4af0c4" stroke-width="1.55"/>
+            <rect x="48" y="197" width="44" height="14" rx="7" fill="#0d1716" stroke="#2f564a" stroke-width="0.8"/>
+            <text x="70" y="207" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#b4d9cf">PSD</text>
+            <text x="98" y="206" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4af0c4">psd.py / measured artifacts</text>
+            <foreignObject x="52" y="228" width="180" height="52">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">PSD Bins / Geometry</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">A_i, L_i, M_i, shell_accessibility, D10</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">measured-bin path, no fractal mainline fallback story</div>
+              </div>
+            </foreignObject>
+            <circle cx="42" cy="231" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+            <circle class="graph-port" data-port="input-psd-out" data-kind="hydraulic" cx="252" cy="223" r="5.5" fill="#4af0c4" stroke="#e1fff7" stroke-width="0.9"/>
+            <circle cx="252" cy="241" r="1.5" opacity="0"/>
+          </g>
 
-        <!-- ── Col 4: Fast extraction pair ── -->
-        <rect x="555" y="57" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
-        <text x="612" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">C_fast</text>
-        <text x="612" y="97" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">acid/sweet [g/L]</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="36" y="292" width="216" height="92" rx="16" fill="url(#nodeBodyGrad)" stroke="#f0a24a" stroke-width="1.55"/>
+            <rect x="36" y="292" width="216" height="28" rx="16" fill="url(#headerOrange)" stroke="#f0a24a" stroke-width="1.55"/>
+            <rect x="48" y="299" width="44" height="14" rx="7" fill="#1e1611" stroke="#6f4b2a" stroke-width="0.8"/>
+            <text x="70" y="309" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f4ceb2">SETUP</text>
+            <text x="98" y="308" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f0a24a">constant.py / measured setup</text>
+            <foreignObject x="52" y="330" width="180" height="52">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Hardware / Ambient</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">dripper mass, cp, server equivalent, ambient</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">measured values stay fixed upstream</div>
+              </div>
+            </foreignObject>
+            <circle cx="42" cy="333" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+            <circle class="graph-port" data-port="input-setup-out" data-kind="thermal" cx="252" cy="325" r="5.5" fill="#f0a24a" stroke="#fff0df" stroke-width="0.9"/>
+            <circle cx="252" cy="343" r="1.5" opacity="0"/>
+          </g>
 
-        <rect x="555" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#4af0c4" stroke-width="1.2"/>
-        <text x="612" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4af0c4">M_fast</text>
-        <text x="612" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid fast [g]</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="36" y="394" width="216" height="92" rx="16" fill="url(#nodeBodyGrad)" stroke="#a24af0" stroke-width="1.55"/>
+            <rect x="36" y="394" width="216" height="28" rx="16" fill="url(#headerPurple)" stroke="#a24af0" stroke-width="1.55"/>
+            <rect x="48" y="401" width="44" height="14" rx="7" fill="#17111f" stroke="#5a367f" stroke-width="0.8"/>
+            <text x="70" y="411" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#d6bcf6">PRIORS</text>
+            <text x="98" y="410" font-family="IBM Plex Mono,monospace" font-size="10" fill="#a24af0">params.py</text>
+            <foreignObject x="52" y="432" width="180" height="52">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Roast / Protocol Priors</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">RoastProfile, PourProtocol, V60Params base</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">semantic entrypoint before closures are evaluated</div>
+              </div>
+            </foreignObject>
+            <circle cx="42" cy="435" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+            <circle class="graph-port" data-port="input-priors-out" data-kind="extraction" cx="252" cy="427" r="5.5" fill="#a24af0" stroke="#f4e9ff" stroke-width="0.9"/>
+            <circle cx="252" cy="445" r="1.5" opacity="0"/>
+          </g>
 
-        <!-- ── Col 5: Slow extraction pair ── -->
-        <rect x="730" y="57" width="115" height="46" rx="2" fill="#111318" stroke="#a24af0" stroke-width="1.2"/>
-        <text x="787" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#a24af0">C_slow</text>
-        <text x="787" y="97" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">bitter/astringent</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="312" y="104" width="234" height="102" rx="16" fill="url(#nodeBodyGrad)" stroke="#4af0c4" stroke-width="1.55"/>
+            <rect x="312" y="104" width="234" height="28" rx="16" fill="url(#headerGreen)" stroke="#4af0c4" stroke-width="1.55"/>
+            <rect x="324" y="111" width="48" height="14" rx="7" fill="#0d1716" stroke="#2f564a" stroke-width="0.8"/>
+            <text x="348" y="121" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#b4d9cf">FLOW</text>
+            <text x="380" y="120" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4af0c4">Hydraulic Closures</text>
+            <foreignObject x="328" y="141" width="194" height="54">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Darcy / Bypass / Clogging</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">k_eff, q_extract, q_bypass, h_cap, h_gas(t)</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">split throat + deposition + wet-bed restructuring</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="closure-hydraulic-in" data-kind="routing" cx="312" cy="143" r="5.2" fill="#4af0c4" stroke="#e1fff7" stroke-width="0.9"/>
+            <circle cx="312" cy="159" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="closure-hydraulic-out" data-kind="hydraulic" cx="546" cy="143" r="5.2" fill="#4af0c4" stroke="#e1fff7" stroke-width="0.9"/>
+            <circle cx="546" cy="159" r="1.5" opacity="0"/>
+          </g>
 
-        <rect x="730" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#a24af0" stroke-width="1.2"/>
-        <text x="787" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#a24af0">M_slow</text>
-        <text x="787" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid slow [g]</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="312" y="222" width="234" height="102" rx="16" fill="url(#nodeBodyGrad)" stroke="#f0a24a" stroke-width="1.55"/>
+            <rect x="312" y="222" width="234" height="28" rx="16" fill="url(#headerOrange)" stroke="#f0a24a" stroke-width="1.55"/>
+            <rect x="324" y="229" width="48" height="14" rx="7" fill="#1e1611" stroke="#6f4b2a" stroke-width="0.8"/>
+            <text x="348" y="239" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f4ceb2">HEAT</text>
+            <text x="380" y="238" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f0a24a">Thermal Closures</text>
+            <foreignObject x="328" y="259" width="194" height="54">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Two-Node Energy Exchange</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">lambda_cool, liquid-dripper, effluent-dripper, mu(T)</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">thermal state feeds both flow and chemistry</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="closure-thermal-in" data-kind="thermal" cx="312" cy="261" r="5.2" fill="#f0a24a" stroke="#fff0df" stroke-width="0.9"/>
+            <circle cx="312" cy="277" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="closure-thermal-out" data-kind="thermal" cx="546" cy="261" r="5.2" fill="#f0a24a" stroke="#fff0df" stroke-width="0.9"/>
+            <circle cx="546" cy="277" r="1.5" opacity="0"/>
+          </g>
 
-        <!-- ── Col 6: Derived outputs ── -->
-        <rect x="912" y="90" width="100" height="46" rx="2" fill="#0d0f14" stroke="#2e3550" stroke-width="1"/>
-        <text x="962" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#8090b0">TDS</text>
-        <text x="962" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">g/L in cup</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="312" y="340" width="234" height="94" rx="16" fill="url(#nodeBodyGrad)" stroke="#a24af0" stroke-width="1.55"/>
+            <rect x="312" y="340" width="234" height="28" rx="16" fill="url(#headerPurple)" stroke="#a24af0" stroke-width="1.55"/>
+            <rect x="324" y="347" width="48" height="14" rx="7" fill="#17111f" stroke="#5a367f" stroke-width="0.8"/>
+            <text x="348" y="357" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#d6bcf6">CHEM</text>
+            <text x="380" y="356" font-family="IBM Plex Mono,monospace" font-size="10" fill="#a24af0">Extraction Closures</text>
+            <foreignObject x="328" y="377" width="194" height="50">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Bin-Resolved Transport</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.16;color:#a4b1ca;word-break:break-word;">Noyes-Whitney, Arrhenius, accessibility, axial CSTR</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.16;color:#8090b0;word-break:break-word;">fast / slow species per PSD bin and per layer</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="closure-extraction-in" data-kind="hydraulic" cx="312" cy="379" r="5.2" fill="#a24af0" stroke="#f4e9ff" stroke-width="0.9"/>
+            <circle cx="312" cy="395" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="closure-extraction-out" data-kind="extraction" cx="546" cy="379" r="5.2" fill="#a24af0" stroke="#f4e9ff" stroke-width="0.9"/>
+            <circle cx="546" cy="395" r="1.5" opacity="0"/>
+          </g>
 
-        <rect x="912" y="185" width="100" height="46" rx="2" fill="#0d0f14" stroke="#2e3550" stroke-width="1"/>
-        <text x="962" y="212" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#8090b0">EY %</text>
-        <text x="962" y="225" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">extraction yield</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="312" y="458" width="234" height="94" rx="16" fill="url(#nodeBodyGrad)" stroke="#4a8ff0" stroke-width="1.55"/>
+            <rect x="312" y="458" width="234" height="28" rx="16" fill="url(#headerBlue)" stroke="#4a8ff0" stroke-width="1.55"/>
+            <rect x="324" y="465" width="48" height="14" rx="7" fill="#0d1420" stroke="#33405f" stroke-width="0.8"/>
+            <text x="348" y="475" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#a9b7d1">ALIGN</text>
+            <text x="380" y="474" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4a8ff0">Observation Preparation</text>
+            <foreignObject x="328" y="495" width="194" height="52">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Measured Alignment Rules</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">ambient resolution, protocol reconstruction, stop-time semantics</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">strict measured case interpretation before loss evaluation</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="closure-align-in" data-kind="extraction" cx="312" cy="497" r="5.2" fill="#4a8ff0" stroke="#dce8ff" stroke-width="0.9"/>
+            <circle cx="312" cy="513" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="closure-align-out" data-kind="routing" cx="546" cy="497" r="5.2" fill="#4a8ff0" stroke="#dce8ff" stroke-width="0.9"/>
+            <circle cx="546" cy="513" r="1.5" opacity="0"/>
+          </g>
 
-        <!-- ══ EDGES ══ -->
+          <g filter="url(#softGlow)">
+            <rect x="614" y="94" width="260" height="430" rx="22" fill="#0f131d" stroke="#4a8ff0" stroke-width="1.6"/>
+            <rect x="614" y="94" width="260" height="34" rx="22" fill="url(#headerBlue)" stroke="#4a8ff0" stroke-width="1.6"/>
+            <rect x="626" y="103" width="54" height="14" rx="7" fill="#0d1420" stroke="#33405f" stroke-width="0.8"/>
+            <text x="653" y="113" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#a9b7d1">SOLVER</text>
+            <text x="690" y="114" font-family="IBM Plex Mono,monospace" font-size="11" fill="#4a8ff0">core.py · simulate_brew()</text>
+            <text x="634" y="154" font-family="IBM Plex Mono,monospace" font-size="16" fill="#e8f0ff">Single Coupled ODE State</text>
 
-        <!-- V_poured → h (Q_in protocol input) -->
-        <line x1="125" y1="113" x2="195" y2="113" stroke="#4a8ff0" stroke-width="1.2" marker-end="url(#arr-b)"/>
-        <text x="160" y="108" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a8ff0">Q_in</text>
+            <rect x="638" y="176" width="212" height="64" rx="12" fill="#121b1b" stroke="#4af0c4" stroke-width="1.2"/>
+            <text x="654" y="199" font-family="IBM Plex Mono,monospace" font-size="12" fill="#4af0c4">Hydraulic States</text>
+            <foreignObject x="654" y="209" width="176" height="30">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.16;color:#c8d0e0;">
+                <div>h, V_out, V_bed, V_poured, V_liq, sat</div>
+                <div style="color:#8090b0;">plus chi_struct, xi_pref feedback</div>
+              </div>
+            </foreignObject>
 
-        <!-- V_poured → h (bloom sat → k_eff, secondary) -->
-        <path d="M 125,130 Q 160,150 195,130" stroke="#4a8ff0" stroke-width="0.8" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
-        <text x="158" y="151" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">sat</text>
+            <rect x="638" y="256" width="212" height="64" rx="12" fill="#201712" stroke="#f0a24a" stroke-width="1.2"/>
+            <text x="654" y="279" font-family="IBM Plex Mono,monospace" font-size="12" fill="#f0a24a">Thermal States</text>
+            <foreignObject x="654" y="289" width="176" height="30">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.16;color:#c8d0e0;">
+                <div>T, T_effluent, T_dripper</div>
+                <div style="color:#8090b0;">ambient-start initialization, energy exchange</div>
+              </div>
+            </foreignObject>
 
-        <!-- h → V_out (Q_ext accumulation, vertical) -->
-        <line x1="245" y1="136" x2="252" y2="192" stroke="#4a8ff0" stroke-width="1.2" marker-end="url(#arr-b)"/>
-        <text x="265" y="165" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a8ff0">Q_ext</text>
+            <rect x="638" y="336" width="212" height="92" rx="12" fill="#171221" stroke="#a24af0" stroke-width="1.2"/>
+            <text x="654" y="359" font-family="IBM Plex Mono,monospace" font-size="12" fill="#a24af0">Extraction States</text>
+            <foreignObject x="654" y="369" width="176" height="48">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.14;color:#c8d0e0;">
+                <div>{C_fast, M_fast, C_slow, M_slow}</div>
+                <div>× PSD bins × axial layers</div>
+                <div style="color:#8090b0;">cup chemistry is an aggregate of local state evolution</div>
+              </div>
+            </foreignObject>
 
-        <!-- V_out → h (β·clog feedback, left arc) -->
-        <path d="M 195,215 C 142,215 142,113 195,113" stroke="#4a8ff0" stroke-width="0.9" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-c)"/>
-        <text x="126" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">β·clog</text>
+            <rect x="638" y="444" width="212" height="56" rx="12" fill="#151a23" stroke="#5b6786" stroke-width="1.1"/>
+            <text x="654" y="467" font-family="IBM Plex Mono,monospace" font-size="12" fill="#c8d0e0">Shared Time March</text>
+            <foreignObject x="654" y="477" width="176" height="20">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.14;color:#8090b0;">same dt, same solve_ivp trajectory, all outputs downstream</div>
+            </foreignObject>
 
-        <!-- h → C_fast (top arc, above all nodes) -->
-        <path d="M 295,104 Q 500,12 612,57" stroke="#4af0c4" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr-b)"/>
+            <circle class="graph-port" data-port="solver-hydraulic-in" data-kind="hydraulic" cx="614" cy="143" r="5.5" fill="#4a8ff0" stroke="#dce8ff" stroke-width="0.9"/>
+            <circle cx="614" cy="159" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="solver-thermal-in" data-kind="thermal" cx="614" cy="261" r="5.5" fill="#f0a24a" stroke="#fff0df" stroke-width="0.9"/>
+            <circle cx="614" cy="277" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="solver-extraction-in" data-kind="extraction" cx="614" cy="379" r="5.5" fill="#a24af0" stroke="#f4e9ff" stroke-width="0.9"/>
+            <circle cx="614" cy="395" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="solver-align-in" data-kind="routing" cx="614" cy="497" r="5.5" fill="#4af0c4" stroke="#e1fff7" stroke-width="0.9"/>
+            <circle cx="614" cy="513" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="solver-out-observation" data-kind="routing" cx="874" cy="200" r="5.5" fill="#4a8ff0" stroke="#dce8ff" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="solver-out-observation-2" data-kind="hydraulic" cx="874" cy="216" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="solver-out-fitting" data-kind="thermal" cx="874" cy="278" r="5.5" fill="#f0a24a" stroke="#fff0df" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="solver-out-fitting-2" data-kind="hydraulic" cx="874" cy="294" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="solver-out-benchmark" data-kind="extraction" cx="874" cy="374" r="5.5" fill="#a24af0" stroke="#f4e9ff" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="solver-out-benchmark-2" data-kind="extraction" cx="874" cy="390" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="solver-out-figures" data-kind="surface" cx="874" cy="464" r="5.5" fill="#5b6786" stroke="#dbe3f8" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="solver-out-figures-2" data-kind="surface" cx="874" cy="480" r="1.5" opacity="0"/>
+          </g>
 
-        <!-- h → C_slow (higher top arc) -->
-        <path d="M 295,108 Q 620,8 787,57" stroke="#4af0c4" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr-p)"/>
+          <g filter="url(#nodeShadow)">
+            <rect x="944" y="102" width="216" height="102" rx="16" fill="url(#nodeBodyGrad)" stroke="#4a8ff0" stroke-width="1.55"/>
+            <rect x="944" y="102" width="216" height="28" rx="16" fill="url(#headerBlue)" stroke="#4a8ff0" stroke-width="1.55"/>
+            <rect x="956" y="109" width="44" height="14" rx="7" fill="#0d1420" stroke="#33405f" stroke-width="0.8"/>
+            <text x="978" y="119" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#a9b7d1">VIEW</text>
+            <text x="1008" y="118" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4a8ff0">observation.py</text>
+            <foreignObject x="960" y="139" width="180" height="54">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.08;">
+                <div style="margin-bottom:6px;">Cup / Server Observation</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">outflow lag, server mixing, observed stop time</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">what the user actually measures, not raw bed exit</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="projection-observation-in" data-kind="routing" cx="944" cy="141" r="5.2" fill="#4a8ff0" stroke="#dce8ff" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="projection-observation-in-secondary" data-kind="thermal" cx="944" cy="157" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="projection-observation-out" data-kind="surface" cx="1160" cy="149" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+          </g>
 
-        <!-- Arc label shared -->
-        <text x="510" y="22" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4af0c4">Q_ext / dilution</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="944" y="220" width="216" height="102" rx="16" fill="url(#nodeBodyGrad)" stroke="#4af0c4" stroke-width="1.55"/>
+            <rect x="944" y="220" width="216" height="28" rx="16" fill="url(#headerGreen)" stroke="#4af0c4" stroke-width="1.55"/>
+            <rect x="956" y="227" width="44" height="14" rx="7" fill="#0d1716" stroke="#2f564a" stroke-width="0.8"/>
+            <text x="978" y="237" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#b4d9cf">FIT</text>
+            <text x="1008" y="236" font-family="IBM Plex Mono,monospace" font-size="10" fill="#4af0c4">fitting.py</text>
+            <foreignObject x="960" y="257" width="180" height="54">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Calibration Surfaces</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">evaluate_measured_flow_fit, thermal profile scoring</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">fit k, k_beta, tau_lag, server cooling under constraints</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="projection-fitting-in-primary" data-kind="extraction" cx="944" cy="259" r="5.2" fill="#4af0c4" stroke="#e1fff7" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="projection-fitting-in-secondary" data-kind="hydraulic" cx="944" cy="275" r="1.5" opacity="0"/>
+            <circle class="graph-port graph-port-anchor" data-port="projection-fitting-in-tertiary" data-kind="thermal" cx="944" cy="291" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="projection-fitting-out" data-kind="surface" cx="1160" cy="267" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+          </g>
 
-        <!-- T → h (μ(T) affects flow rate, left arc) -->
-        <path d="M 382,145 Q 340,90 295,113" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-c)"/>
-        <text x="320" y="85" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f0a24a">μ(T)→Q</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="944" y="338" width="216" height="102" rx="16" fill="url(#nodeBodyGrad)" stroke="#a24af0" stroke-width="1.55"/>
+            <rect x="944" y="338" width="216" height="28" rx="16" fill="url(#headerPurple)" stroke="#a24af0" stroke-width="1.55"/>
+            <rect x="956" y="345" width="44" height="14" rx="7" fill="#17111f" stroke="#5a367f" stroke-width="0.8"/>
+            <text x="978" y="355" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#d6bcf6">GATE</text>
+            <text x="1008" y="354" font-family="IBM Plex Mono,monospace" font-size="10" fill="#a24af0">benchmark.py</text>
+            <foreignObject x="960" y="375" width="180" height="54">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Regression Gates</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">volume RMSE, q RMSE, drain time, cup temperature</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">formal PASS / FAIL surface for model changes</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="projection-benchmark-in-primary" data-kind="extraction" cx="944" cy="377" r="5.2" fill="#a24af0" stroke="#f4e9ff" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="projection-benchmark-in-secondary" data-kind="surface" cx="944" cy="393" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="projection-benchmark-out" data-kind="surface" cx="1160" cy="385" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+          </g>
 
-        <!-- T → C_fast (Arrhenius k_ext) -->
-        <path d="M 482,148 Q 520,120 555,100" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
-        <text x="504" y="117" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f0a24a">k_ext(T)</text>
+          <g filter="url(#nodeShadow)">
+            <rect x="944" y="456" width="216" height="102" rx="16" fill="url(#nodeBodyGrad)" stroke="#f0a24a" stroke-width="1.55"/>
+            <rect x="944" y="456" width="216" height="28" rx="16" fill="url(#headerOrange)" stroke="#f0a24a" stroke-width="1.55"/>
+            <rect x="956" y="463" width="44" height="14" rx="7" fill="#1e1611" stroke="#6f4b2a" stroke-width="0.8"/>
+            <text x="978" y="473" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f4ceb2">SHOW</text>
+            <text x="1008" y="472" font-family="IBM Plex Mono,monospace" font-size="10" fill="#f0a24a">viz.py / showcase_state.py / index.html</text>
+            <foreignObject x="960" y="493" width="180" height="54">
+              <div xmlns="http://www.w3.org/1999/xhtml" style="width:100%;height:100%;overflow:hidden;box-sizing:border-box;color:#e8f0ff;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.06;">
+                <div style="margin-bottom:6px;">Figures / Landing Page</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#a4b1ca;word-break:break-word;">flow diagnostics, extraction quality, calibrated showcase</div>
+                <div style="font-family:'IBM Plex Sans',sans-serif;font-size:10px;line-height:1.18;color:#8090b0;word-break:break-word;">public narrative must follow the same main model</div>
+              </div>
+            </foreignObject>
+            <circle class="graph-port" data-port="projection-figures-in-primary" data-kind="surface" cx="944" cy="495" r="5.2" fill="#f0a24a" stroke="#fff0df" stroke-width="0.9"/>
+            <circle class="graph-port graph-port-anchor" data-port="projection-figures-in-secondary" data-kind="surface" cx="944" cy="511" r="1.5" opacity="0"/>
+            <circle class="graph-port" data-port="projection-figures-out" data-kind="surface" cx="1160" cy="503" r="4.5" fill="#0f131b" stroke="#3c4866" stroke-width="1.1"/>
+          </g>
 
-        <!-- T → C_slow -->
-        <path d="M 482,151 Q 606,168 730,100" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-p)"/>
+          <g id="system-map-wires" filter="url(#cableGlow)"></g>
+          <circle class="graph-port-anchor" data-port="solver-state-hydraulic-down" data-kind="surface" cx="744" cy="240" r="1.5" opacity="0"/>
+          <circle class="graph-port-anchor" data-port="solver-state-thermal-up" data-kind="surface" cx="744" cy="256" r="1.5" opacity="0"/>
+          <circle class="graph-port-anchor" data-port="solver-state-thermal-down" data-kind="surface" cx="744" cy="320" r="1.5" opacity="0"/>
+          <circle class="graph-port-anchor" data-port="solver-state-extraction-up" data-kind="surface" cx="744" cy="336" r="1.5" opacity="0"/>
 
-        <!-- Newton cooling input to T (from below) -->
-        <line x1="432" y1="238" x2="432" y2="174" stroke="#4a5470" stroke-width="0.8" stroke-dasharray="2,3" marker-end="url(#arr-a)"/>
-        <text x="445" y="248" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">T_amb</text>
-
-        <!-- C_fast ↔ M_fast (depletion coupling) -->
-        <line x1="622" y1="103" x2="622" y2="192" stroke="#4a8ff0" stroke-width="1" marker-end="url(#arr-c)"/>
-        <line x1="602" y1="192" x2="602" y2="103" stroke="#4af0c4" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
-
-        <!-- C_slow ↔ M_slow -->
-        <line x1="797" y1="103" x2="797" y2="192" stroke="#a24af0" stroke-width="1" marker-end="url(#arr-p)"/>
-        <line x1="777" y1="192" x2="777" y2="103" stroke="#a24af0" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arr-p)"/>
-
-        <!-- C_fast → TDS -->
-        <path d="M 670,80 Q 791,60 912,113" stroke="#4a5470" stroke-width="1" fill="none" marker-end="url(#arr)"/>
-
-        <!-- C_slow → TDS -->
-        <path d="M 845,78 Q 900,64 962,90" stroke="#4a5470" stroke-width="1" fill="none" marker-end="url(#arr)"/>
-
-        <!-- TDS → EY -->
-        <line x1="962" y1="136" x2="962" y2="185" stroke="#4a5470" stroke-width="0.9" marker-end="url(#arr)"/>
-
-        <!-- Legend -->
-        <line x1="20"  y1="278" x2="50"  y2="278" stroke="#4af0c4" stroke-width="1" stroke-dasharray="4,3"/>
-        <text x="56"  y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">fluid coupling</text>
-        <line x1="155" y1="278" x2="185" y2="278" stroke="#f0a24a" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="191" y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">thermal coupling</text>
-        <line x1="310" y1="278" x2="340" y2="278" stroke="#a24af0" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="346" y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid↔pore</text>
-      </svg>
-    </div>
-    <div class="mini-note" style="margin-top:14px">The left-to-right map reads as protocol input → hydraulic state → thermal state → extraction state → cup outputs. That ordering is intentional: it keeps local reasoning possible while preserving the coupled physics.</div>
+          <rect x="34" y="590" width="1132" height="24" rx="12" fill="#0f131b" stroke="#1f2940" stroke-width="1"/>
+          <line x1="58" y1="602" x2="88" y2="602" stroke="#4a8ff0" stroke-width="2"/>
+          <text x="96" y="606" font-family="IBM Plex Mono,monospace" font-size="9" fill="#8090b0">measured input / routing</text>
+          <line x1="278" y1="602" x2="308" y2="602" stroke="#4af0c4" stroke-width="2"/>
+          <text x="316" y="606" font-family="IBM Plex Mono,monospace" font-size="9" fill="#8090b0">hydraulic logic</text>
+          <line x1="458" y1="602" x2="488" y2="602" stroke="#f0a24a" stroke-width="2"/>
+          <text x="496" y="606" font-family="IBM Plex Mono,monospace" font-size="9" fill="#8090b0">thermal logic</text>
+          <line x1="630" y1="602" x2="660" y2="602" stroke="#a24af0" stroke-width="2"/>
+          <text x="668" y="606" font-family="IBM Plex Mono,monospace" font-size="9" fill="#8090b0">extraction logic</text>
+          <line x1="822" y1="602" x2="852" y2="602" stroke="#5b6786" stroke-width="2" stroke-dasharray="6,5"/>
+          <text x="860" y="606" font-family="IBM Plex Mono,monospace" font-size="9" fill="#8090b0">projection / report surface</text>
+          <text x="1094" y="606" text-anchor="end" font-family="IBM Plex Mono,monospace" font-size="9" fill="#4a5470">ComfyUI-style structure map</text>
+        </svg>
+      </div>
+      <div class="mini-note" style="margin-top:14px">Read the graph from left to right. Nothing on the page should bypass the measured-input layer or invent a second hidden model: closures feed one ODE engine, the observation layer translates that state into what the brewer measures, and fitting / benchmark / visualization are downstream technical surfaces rather than alternative physics.</div>
+      <div class="mini-note" style="margin-top:10px">This is why the repo can stay physically interpretable while still being practical: each node has one job, but the state trajectory is shared. Hydraulic fixes, thermal semantics repairs, and PSD updates all meet in the same solver instead of forking into separate pipelines.</div>
     </div>
   </div>
 
@@ -1045,6 +1292,104 @@ function toggleTheme(){
 }
 (function(){try{const s=localStorage.getItem('theme');if(s){document.documentElement.dataset.theme=s;document.getElementById('tlabel').textContent=s.toUpperCase()}}catch(e){}})();
 
+/* ── SYSTEM MAP WIRING ── */
+const SYSTEM_MAP_KIND_STYLE = {
+  routing:    {stroke:'#4a8ff0', socketFill:'#4a8ff0', socketStroke:'#dce8ff', marker:'url(#arr-b)', width:2.6},
+  hydraulic:  {stroke:'#4af0c4', socketFill:'#4af0c4', socketStroke:'#e1fff7', marker:'url(#arr-c)', width:2.6},
+  thermal:    {stroke:'#f0a24a', socketFill:'#f0a24a', socketStroke:'#fff0df', marker:'url(#arr-a)', width:2.6},
+  extraction: {stroke:'#a24af0', socketFill:'#a24af0', socketStroke:'#f4e9ff', marker:'url(#arr-p)', width:2.6},
+  surface:    {stroke:'#7281a5', socketFill:'#5b6786', socketStroke:'#dbe3f8', marker:'url(#arr)', width:1.9},
+};
+
+const SYSTEM_MAP_CONNECTIONS = [
+  {from:'input-flow-out', to:'closure-hydraulic-in', kind:'routing'},
+  {from:'input-psd-out', to:'closure-extraction-in', kind:'hydraulic'},
+  {from:'input-setup-out', to:'closure-thermal-in', kind:'thermal'},
+  {from:'input-priors-out', to:'closure-align-in', kind:'extraction'},
+  {from:'closure-hydraulic-out', to:'solver-hydraulic-in', kind:'hydraulic'},
+  {from:'closure-thermal-out', to:'solver-thermal-in', kind:'thermal'},
+  {from:'closure-extraction-out', to:'solver-extraction-in', kind:'extraction'},
+  {from:'closure-align-out', to:'solver-align-in', kind:'routing'},
+  {from:'solver-state-hydraulic-down', to:'solver-state-thermal-up', kind:'surface'},
+  {from:'solver-state-thermal-down', to:'solver-state-extraction-up', kind:'surface'},
+  {from:'solver-out-observation', to:'projection-observation-in', kind:'routing'},
+  {from:'solver-out-observation-2', to:'projection-fitting-in-secondary', kind:'hydraulic', dashed:true},
+  {from:'solver-out-fitting', to:'projection-fitting-in-tertiary', kind:'thermal'},
+  {from:'solver-out-benchmark', to:'projection-benchmark-in-primary', kind:'extraction'},
+  {from:'solver-out-benchmark-2', to:'projection-fitting-in-primary', kind:'extraction', dashed:true},
+  {from:'solver-out-figures', to:'projection-figures-in-primary', kind:'surface'},
+  {from:'solver-thermal-in', to:'projection-observation-in-secondary', kind:'thermal', dashed:true},
+  {from:'projection-observation-out', to:'projection-fitting-out', kind:'surface'},
+  {from:'projection-fitting-out', to:'projection-benchmark-out', kind:'surface'},
+  {from:'projection-benchmark-out', to:'projection-figures-out', kind:'surface'},
+];
+
+function getSvgPointFromElement(svg, el){
+  const rect = el.getBoundingClientRect();
+  const point = svg.createSVGPoint();
+  point.x = rect.left + rect.width / 2;
+  point.y = rect.top + rect.height / 2;
+  const ctm = svg.getScreenCTM();
+  return ctm ? point.matrixTransform(ctm.inverse()) : {x:0,y:0};
+}
+
+function buildSystemMapBezier(a, b){
+  const dx = b.x - a.x;
+  const absDx = Math.abs(dx);
+  const curve = Math.max(36, Math.min(110, absDx * 0.45 || 48));
+  const c1x = a.x + curve;
+  const c2x = b.x - curve;
+  return `M ${a.x} ${a.y} C ${c1x} ${a.y}, ${c2x} ${b.y}, ${b.x} ${b.y}`;
+}
+
+function renderSystemMapWires(){
+  const svg = document.getElementById('system-map-svg');
+  const wireLayer = document.getElementById('system-map-wires');
+  if(!svg || !wireLayer) return;
+
+  const portEls = Array.from(svg.querySelectorAll('[data-port]'));
+  const portMap = new Map(portEls.map(el => [el.dataset.port, el]));
+
+  portEls.forEach(el => {
+    const kind = el.dataset.kind;
+    const style = SYSTEM_MAP_KIND_STYLE[kind];
+    if(!style || el.classList.contains('graph-port-anchor')) return;
+    el.setAttribute('fill', style.socketFill);
+    el.setAttribute('stroke', style.socketStroke);
+  });
+
+  wireLayer.innerHTML = '';
+
+  SYSTEM_MAP_CONNECTIONS.forEach((edge, i) => {
+    const from = portMap.get(edge.from);
+    const to = portMap.get(edge.to);
+    const style = SYSTEM_MAP_KIND_STYLE[edge.kind];
+    if(!from || !to || !style) return;
+
+    const a = getSvgPointFromElement(svg, from);
+    const b = getSvgPointFromElement(svg, to);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', buildSystemMapBezier(a, b));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', style.stroke);
+    path.setAttribute('stroke-width', String(edge.width || style.width));
+    path.setAttribute('marker-end', style.marker);
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('data-kind', edge.kind);
+    path.setAttribute('data-wire', `${edge.from}->${edge.to}`);
+    if(edge.dashed) path.setAttribute('stroke-dasharray', '7 6');
+    if(edge.kind === 'surface') path.setAttribute('opacity', '0.95');
+    wireLayer.appendChild(path);
+  });
+}
+
+let systemMapWireRaf = 0;
+function scheduleSystemMapWires(){
+  cancelAnimationFrame(systemMapWireRaf);
+  systemMapWireRaf = requestAnimationFrame(renderSystemMapWires);
+}
+
 /* ── V60 SVG water level animation ── */
 function animateV60(){
   let phase=0;
@@ -1080,7 +1425,11 @@ function animateV60(){
   }, 80);
 }
 
-window.addEventListener('load', animateV60);
+window.addEventListener('load', ()=>{
+  animateV60();
+  scheduleSystemMapWires();
+});
+window.addEventListener('resize', scheduleSystemMapWires);
 </script>
 </body>
 </html>

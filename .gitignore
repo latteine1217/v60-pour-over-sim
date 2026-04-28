@@ -16,12 +16,16 @@ build/
 !v60_tds.png
 !v60_grind.png
 !v60_thermal.png
+!data/**/*.png
 
 # 本地量測媒體
 # 保留 raw CSV 與 model-ready PSD CSV；忽略大型照片與 PDF 來源媒體。
-data/kinu_29_light/*.jpg
-data/kinu_29_light/*.jpeg
-data/kinu_29_light/*.pdf
+data/**/*.[jJ][pP][gG]
+data/**/*.[jJ][pP][eE][gG]
+data/**/*.[pP][dD][fF]
+
+# Agent-local planning notes; durable project state belongs in EXPERIMENT_LOG.md/docs.
+docs/superpowers/
 
 # Editor
 .DS_Store
