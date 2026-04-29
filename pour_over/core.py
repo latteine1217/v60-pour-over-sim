@@ -198,19 +198,26 @@ def simulate_brew(
                       params.V_liquid * 0.05)
 
         # 熱動方程（修正 [6]）—— CSTR 焓平衡推導
-        # 完整焓平衡：d(V_eff·T)/dt = Q_in·T_brew - Q_out·T - λ·V_eff·(T-T_amb)
-        # 展開左側：V_eff·dT/dt + T·dV_eff/dt = Q_in·T_brew - Q_out·T - λ·V_eff·(T-T_amb)
-        # 代入 dV_eff/dt = Q_in - Q_out（質量守恆）：
-        # → V_eff·dT/dt = Q_in·T_brew - Q_out·T - T·(Q_in-Q_out) - λ·V_eff·(T-T_amb)
-        #               = Q_in·(T_brew-T) - λ·V_eff·(T-T_amb)
-        # 結論：dm/dt 項在展開後「自然相消」，現有簡化公式完全等價於完整焓平衡。
+        # 完整焓平衡：d(V_eff·T)/dt = Q_in_free·T_brew - Q_out·T - λ·V_eff·(T-T_amb)
+        # 展開左側：V_eff·dT/dt + T·dV_eff/dt = Q_in_free·T_brew - Q_out·T - λ·V_eff·(T-T_amb)
+        # 代入 dV_eff/dt = dV_liq/dt = Q_in_free - Q_out（V_liq_t = phi·cone(h)，由 dh/dt 驅動，
+        # 而 dh/dt = (Q_in_free - Q_out)/area；bloom 期 sat<1 時注水被 sat_flow 節流，
+        # 真正進入床層的進水率為 Q_in_free，未節流的 Q_in 留在表面尚未抵達粉床）：
+        # → V_eff·dT/dt = Q_in_free·T_brew - Q_out·T - T·(Q_in_free-Q_out) - λ·V_eff·(T-T_amb)
+        #               = Q_in_free·(T_brew-T) - λ·V_eff·(T-T_amb)
+        # 結論：必須用 Q_in_free（而非 Q_in），dm/dt 項展開後才會自然相消；
+        # 舊版用 Q_in 在 sat<1 時等效於把未進床的水也算成熱源，會高估前段升溫。
         # 修正 Bug [熱慣性]：咖啡粉固體熱容為常駐項，不隨 sat 消失。
         # 舊版 V_equiv_coffee × (1-sat) 在 sat→1 時錯誤移除粉體熱容，
         # 導致第一注完成瞬間分母縮小，引發虛假溫度跳變並低估後段降溫效果。
         # 修正：V_equiv_coffee 無論 sat 為何，始終計入熱動方程分母。
+        # 初值 T(0) = T_amb：ODE 已自洽地把第一注熱量（Q_in_free·T_brew）計入 dT，
+        # 若再用 first_pour_volume 預混 T_shock 設成 y0 初值，會造成第一注能量
+        # 雙重計入（一次在初值跳升、一次在 t>0 的 ODE 積分）。故初值取 T_amb，
+        # 由 ODE 自然累積溫升即可。
         V_eff_T = V_liq_t + params.V_equiv_coffee
         exchange_liq_dripper = params.lambda_liquid_dripper * (T - T_dripper)
-        dT = (Q_in / V_eff_T) * (params.T_brew - T) \
+        dT = (Q_in_free / V_eff_T) * (params.T_brew - T) \
              - params.lambda_cool * (T - params.T_amb) \
              - exchange_liq_dripper
 
@@ -250,21 +257,15 @@ def simulate_brew(
         ))
 
     t_eval = np.linspace(0, t_end, n_eval)
-    # 初始熱衝擊溫度
-    V_bloom   = protocol.first_pour_volume_ml() * 1e-6
-    m_w_bloom = V_bloom * RHO
-    m_coffee  = params.dose_g * 1e-3
-    CP_W      = 4180.0
-    T_shock   = (m_w_bloom * CP_W * params.T_brew + m_coffee * params.Cp_coffee * params.T_amb) \
-                / (m_w_bloom * CP_W + m_coffee * params.Cp_coffee)
-
+    # 初值取 T_amb：第一注熱量由 ODE 自身的 Q_in_free·T_brew 項負責累積，
+    # 若再用 first_pour_volume 預混成 T_shock 當初值，會與 ODE 形成第一注能量雙重計入。
     y0 = np.concatenate((
         np.array([H_MIN, 0.0, 0.0, 0.0, 0.0], dtype=float),
         np.zeros(n_axial, dtype=float),
         M_fast_0_layers.reshape(-1),
         np.zeros(n_axial, dtype=float),
         M_slow_0_layers.reshape(-1),
-        np.array([T_shock, params.T_amb, 0.0, 0.0], dtype=float),
+        np.array([params.T_amb, params.T_amb, 0.0, 0.0], dtype=float),
     ))
 
     sol = solve_ivp(

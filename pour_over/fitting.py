@@ -45,13 +45,15 @@ from .viz import (
     _save_fig,
     plot_results,
 )
+from .calibration_state import (
+    DEFAULT_PREF_FLOW_OPEN_RATE_FIXED,
+    DEFAULT_PREF_FLOW_TAU_DECAY_FIXED,
+    DEFAULT_WETBED_STRUCT_RATE_FIXED,
+)
 
 DEFAULT_MEASURED_FLOW_CSV = "data/kinu29_light_20g_flow_profile.csv"
 DEFAULT_MEASURED_FLOW_FIT_PLOT = "data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png"
 DEFAULT_MEASURED_FLOW_FIT_SUMMARY = "data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
-DEFAULT_WETBED_STRUCT_RATE_FIXED = 0.06068366147200567
-DEFAULT_PREF_FLOW_OPEN_RATE_FIXED = 0.254074546131474
-DEFAULT_PREF_FLOW_TAU_DECAY_FIXED = 3.1401416403754285
 
 
 def evaluate_measured_flow_fit(

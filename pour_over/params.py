@@ -396,16 +396,14 @@ class V60Params(V60Constant):
     #      0.1 = 物理合理估計（靜置僅靠分子擴散，效率約為對流狀態的 10%）
     #      量化影響：60s 悶蒸 EY 貢獻從 +1.31% 降至 ~0.3-0.5%（符合 Gagné 觀測邊界）
 
-    k_ext_fast_mult: float = 2.3
-    # Fast 組分萃取速率倍率（相對於 k_ext_coef 的乘數）
-    # Why: flow_factor 引入後，整場平均 k_ext 整體被壓低；
-    #      Fast（小分子、酸甜）更依賴對流更新，需要較大補償（+15%：2.0 → 2.3）
-    #      使標準沖煮 EY 回到 SCA 目標 18–22% 並保持 Fast/Slow 相對動力學比例
+    k_ext_fast_coef: float = 6.0e-7 * 2.3
+    # Fast 組分萃取基礎速率常數（已合併原 k_ext_coef × k_ext_fast_mult = 2.3 倍）
+    # Why: 直接給定單一 base coefficient，避免「base × multiplier」雙自由度退化；
+    #      Fast（小分子、酸甜）更依賴對流更新，需要較大基礎速率以維持 SCA 目標 EY 18–22%
 
-    k_ext_slow_mult: float = 0.525
-    # Slow 組分萃取速率倍率（相對於 k_ext_coef 的乘數）
-    # Why: Slow（苦味大分子）在靜置時仍有緩慢累積；補償幅度保守（+5%：0.5 → 0.525）
-    #      避免長悶蒸（>60s）下苦味組分過度萃取，保留 k_diff_ratio 的抑制效果
+    k_ext_slow_coef: float = 6.0e-7 * 0.525
+    # Slow 組分萃取基礎速率常數（已合併原 k_ext_coef × k_ext_slow_mult = 0.525 倍）
+    # Why: Slow（苦味大分子）在靜置時仍有緩慢累積；保守基礎速率避免長悶蒸過度萃取
 
     Q_half: float = 3e-7
     # Hill 方程半飽和流速 [m³/s]（= 0.3 mL/s）
@@ -904,7 +902,11 @@ class V60Params(V60Constant):
         self.ref_surface_area_slow_spec = ref_particle.get("surface_area_slow", self.ref_surface_area_spec)
         self.shell_fraction_abs = particle["shell_fraction"]
         self.ref_shell_fraction_abs = ref_particle["shell_fraction"]
-        self.shell_accessibility_ratio = self.shell_fraction_abs / max(self.ref_shell_fraction_abs, 1e-12)
+        self.shell_accessibility_ratio = float(np.clip(
+            self.shell_fraction_abs / max(self.ref_shell_fraction_abs, 1e-12),
+            0.0, 1.0,
+        ))
+        # 殼層可及性最多等同 reference 殼層；不可作為放大可萃取總量的乘數。
         self.diffusion_path_m = particle["diffusion_path_m"]
         self.ref_diffusion_path_m = ref_particle["diffusion_path_m"]
         self.diffusion_path_fast_m = particle.get("diffusion_path_fast_m", self.diffusion_path_m)
@@ -962,8 +964,8 @@ class V60Params(V60Constant):
         D_slow_ref = self.diffusion_coeff(self.T_ref, slow=True)
         nw_fast_ref = A_fast_ref * D_fast_ref / max(L_fast_ref, 1e-18)
         nw_slow_ref = A_slow_ref * D_slow_ref / max(L_slow_ref, 1e-18)
-        self.nw_eta_fast = (self.k_ext_coef * self.k_ext_fast_mult) / max(nw_fast_ref, 1e-18)
-        self.nw_eta_slow = (self.k_ext_coef * self.k_ext_slow_mult) / max(nw_slow_ref, 1e-18)
+        self.nw_eta_fast = self.k_ext_fast_coef / max(nw_fast_ref, 1e-18)
+        self.nw_eta_slow = self.k_ext_slow_coef / max(nw_slow_ref, 1e-18)
         self.k_beta_prior_psd = self.k_beta_prior_from_psd()
         throat = getattr(self, "psd_throat_clog_index", np.nan)
         deposition = getattr(self, "psd_deposition_clog_index", np.nan)
@@ -1666,12 +1668,13 @@ class V60Params(V60Constant):
         pour_impact: float = 0.0,
     ):
         """
-        綜合有效滲透率：喉道阻塞/結構記憶/沉積 × 顆粒溶脹（Kozeny-Carman）× 壓差壓實
+        綜合有效滲透率：喉道阻塞/結構記憶/沉積（加性阻力疊加）× 顆粒溶脹（Kozeny-Carman）× 壓差壓實
 
         What:
               k_eff(V_out, sat, h)
             = k_clog(V_out, impact, chi) × k_kc(sat, h) × f_post(q_in, u, h)
-              k_clog = k0 / (throat_eff · throat_struct · deposition)
+              k_clog = k0 / resistance_total
+              resistance_total = 1 + (throat_eff - 1) + (throat_struct - 1) + (deposition - 1)
               k_kc  = (φ_eff/φ₀)³·((1-φ₀)/(1-φ_eff))²
               φ_eff = φ₀ - Δφ_sat·sat - Δφ_p·head_ratio
               f_post: bloom 後濕床重排（可逆壓實 × 小幅即時沉積）
@@ -1687,6 +1690,12 @@ class V60Params(V60Constant):
              解耦後，k_beta 只代表「細粉量」，delta_phi 只代表「纖維膨脹度」，
              讓參數的物理意義更純粹，擬合偏差更小。
 
+             改採加性阻力疊加：Darcy 阻力本質為各機制阻力相加，每個 (term - 1)
+             代表該機制相對於無堵塞 baseline 的額外阻力分量。原本的乘性疊加會把
+             小擾動相互放大，造成 k_beta 與 wetbed_struct_gain 在 fitting 上出現
+             identifiability ridge（EXPERIMENT_LOG.md 已記錄）。
+             注意：此改動會偏移既有 k_beta / wetbed_struct_gain 校準值，需重新擬合。
+
         TODO: 加入攪動項：dk/dt = -beta_agit·Q_in·k（高 Q_in 時細粉遷移更快）
         """
         throat_term, deposition_term = self.k_beta_components(V_out)
@@ -1696,7 +1705,14 @@ class V60Params(V60Constant):
         phi_sw = self.phi_effective(sat, h)
         kc = (phi_sw / self.phi)**3 * ((1.0 - self.phi) / (1.0 - phi_sw))**2
         f_post = self.wetbed_postbloom_factor(q_in, u_pore, h or 0.0, t_sec, bloom_end_s)
-        return self.k / (throat_eff * throat_struct * deposition_term) * kc * f_post
+        # 加性阻力疊加：各機制的 (term - 1) 為相對 baseline 的額外阻力，總阻力為三者相加
+        resistance_extra = (
+            (throat_eff - 1.0)
+            + (throat_struct - 1.0)
+            + (deposition_term - 1.0)
+        )
+        resistance_total = 1.0 + resistance_extra
+        return self.k / resistance_total * kc * f_post
 
     def psi_eff(self, V_out) -> float:
         """
@@ -1808,6 +1824,18 @@ class V60Params(V60Constant):
                表示濕床主導的工程簡化，而非讓截面隨瞬時水位 h 改變
             同時將 `kr(sat)` 顯式放入 Darcy 主流量，讓 `h_eff` 只負責驅動頭、
             `kr(sat)` 只負責連通液相比例，兩者不再混成同一個 cutoff。
+
+        假設適用範圍（流動截面尺度）:
+            本式以固定參考截面 A_ref = π·tan²θ·h_bed² 表示通量，等價於假設
+            自由水位 h 大致座落在 h ≈ h_bed 的等效錐面附近。core.simulate_brew
+            的儲水方程改用瞬時 A(h) = π·tan²θ·h²，因此當 h ≪ h_bed（如沖煮
+            末段水位接近排空）時，q_extract 相對 storage 邏輯會以
+            (h/h_bed)² 的量級高估出口流量。
+            Kinu29 light / 20 g / h_bed=5.3 cm / 180 s 基準下實測：
+            ratio = A(h)/A_ref 中位數 ≈ 0.72，最大 ≈ 1.26，
+            僅 ~22% 模擬時間落在 h < 0.5·h_bed、~6% 落在 h < 0.2·h_bed。
+            主沖煮段誤差 < 30%，僅 drain tail 短暫區間 (h/h_bed)² → 0
+            時局部高估明顯，但該段 h_eff 也已接近 0，絕對流量影響有限。
         """
         if k_val is None:
             k_val = self.k

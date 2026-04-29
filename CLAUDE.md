@@ -111,8 +111,8 @@
 ### D. 原則上不要先動的次級參數
 
 - `k_ext_coef`
-- `k_ext_fast_mult`
-- `k_ext_slow_mult`
+- `k_ext_fast_coef`
+- `k_ext_slow_coef`
 - `Ea_fast / Ea_slow`
 - 已有實測 shape data 後仍想再調的 shape multiplier
 
