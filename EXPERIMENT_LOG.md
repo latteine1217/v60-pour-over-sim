@@ -310,6 +310,35 @@
 
 ---
 
+## 2026-04-30 03:47:20 +0800
+
+- 改動：
+  - `beta_access` default 從 `1.5` 降回 `1.0`（constant-area Noyes-Whitney within pool）
+  - 同步重寫 `params.py` 該 field docstring：說明 bin-resolved 已結構性表達 aggregate「末期阻力」，pool 內部不應再疊冪次衰減
+- 實驗：
+  - β sweep ∈ {0.67, 1.0, 1.25, 1.5, 2.0}（calibrated baseline，measured kinu29 light protocol，t_end=180 s）
+  - sanity check：default `V60Params()` + `PourProtocol.standard_v60()`（中焙 93°C，340 mL recipe）
+  - benchmark：`data/benchmark_suite_summary.csv`（已重跑驗證）
+- 結果（β sweep，measured kinu29 light）：
+  - fast pool 耗盡時序：β=1.0 在 t=60 s 已耗盡至 1.5%；β=1.5 t=90 s 仍剩 4.1%
+  - dEY/dt 區間：β=1.0 [60,90]=23 m%/s [120,150]=1.9 m%/s（12× 衰減）；β=1.5 [60,90]=35 m%/s
+  - Slow pool 對 β 幾乎不敏感（Δ < 1% across β）
+  - β=1.5 反而把 fast pool 拖長至 90 s 後才耗盡，與杯測「fast 前段出完」的直覺相反
+  - default `V60Params() + standard_v60` 在 β=1.0 下：`EY_cup = 19.91%, TDS = 13.36 g/L`，落在 SCA Golden Cup 區間（EY 18-22%, TDS 11.5-14.5 g/L）
+  - benchmark：4/4 gates `PASS`（V_out RMSE 13.99 mL 不變；β 只進萃取 ODE，不入水力路徑）
+  - measured baseline 萃取面：`EY_cup` 從 8.64%（β=1.5）→ 8.92%（β=1.0），`TDS` 從 6.33 → 6.54 g/L，Fast/Slow ratio 微移
+- 判讀：
+  - β > 1 的「pool 內部超線性」物理依據不清——殼層 200 μm 內無法支撐 super-linear 阻力；β=1.5 是 aggregate-pool 時代為了擬合「末期阻力」而設的補償常數，現在 bin-resolved 框架已自帶這個物理（fast 短 L + 小 reservoir vs slow 長 L + 大 reservoir → 12× 衰減的 dEY/dt 比例）
+  - β=1.5 的實際效應與設計初衷相反：把 fast pool 拖長，導致 mid-time 速率反而被人為拉高，而不是「末期阻力」
+  - V_out RMSE 完全不變，確認 β 是純萃取參數；benchmark 與校準解保持一致
+  - SCA Golden Cup envelope 仍守住，僅 EY 與 TDS 在絕對量上略升（更接近區間中位）
+  - 不需重跑 fit_k_kbeta_from_flow_profile（β 不在 fit 變數中）
+- 後續觀察：
+  - 風味診斷標籤（`Bright & Acidic` / `Heavy & Bitter` / `Balanced` 等）的 fast_ratio 邊界 0.45 / 0.55 在 β=1.0 下是否仍對應實際杯測經驗，需要實際品飲 vs 模型輸出對比
+  - 若日後想引入 β=2/3（shrinking-core）做更精細粒徑/殼層幾何，需先驗證 PSD bins 的 D 與 L 是否準確到足以區分 1.0 vs 0.67
+
+---
+
 ## 中間結論（供下次迭代直接使用）
 
 - `sat_flow` 硬切已被平滑鬆弛取代，避免 bloom 結束後的人為不連續
@@ -323,6 +352,7 @@
 - `k_eff` 阻塞合成採加性阻力（throat / struct / deposition 各為 `1 + 額外阻力`，再相加）；不再用乘性疊加
 - 熱方程使用 `Q_in_free`（受 `sat_flow` 節流的進床流量），確保 `bloom` 期 `dV_eff/dt` 與焓平衡一致；ODE 從 `T_amb` 起算，避免首注熱量雙重計入
 - `M_sol_0` 永不超過 `dose × max_EY`：`shell_accessibility_ratio` 已 clip 在 `[0, 1]`
+- `beta_access` 預設 `1.0`：constant-area Noyes-Whitney within pool；aggregate「末期阻力」由 fast/slow 雙 pool 結構承擔，不再用 β > 1 補償
 - 萃取端目前正式版本應維持 `axial_node_count = 2`
 - `sat_rel_perm_residual` 與 `sat_rel_perm_exp` 目前應視為弱可識別 closure：
   - 可保留於主模型

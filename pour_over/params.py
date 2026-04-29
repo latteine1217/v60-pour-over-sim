@@ -423,15 +423,23 @@ class V60Params(V60Constant):
     #      高溫（93°C）比低溫（20°C）快 2.8×，復現「高溫水入粉快」的物理現象
     #      注：此項與液壓填充（Q_in/V_absorb）疊加，不是取代
 
-    # ── 修正 [11] 可及性冪次律（Shrinking-Core Accessibility）───────────────
-    beta_access: float = 1.5
-    # 溶質可及性冪次指數（>1 = 超線性衰減）
-    # Why: M_sol 下降時，易萃的「地表溶質」先耗盡，剩下被細胞壁困住的「深層溶質」。
-    #      驅動力修正：C_eff = C_sat(T) × (M/M₀)^β
-    #      β=1：目前線性模型（C_eff ∝ M/M₀）
-    #      β=2/3：縮核模型（球形粒子，面積 ∝ r² ∝ M^(2/3)）⟵ 偏高
-    #      β=1.5：超線性，對應「末期阻力驟增」的杯測觀察（推薦預設）
-    #      量化效果：M=0.5M₀ 時 C_eff/C_sat = 0.5^1.5 = 35%（vs 線性的 50%）
+    # ── 修正 [11] Pool 內部驅動力衰減（constant-area Noyes-Whitney）─────────
+    beta_access: float = 1.0
+    # 單一 pool 內部的驅動力衰減冪次。
+    # Why: bin-resolved 框架已透過 fast / slow 雙 pool 結構表達「易出的先走、
+    #      難出的後走」這個 aggregate 「末期阻力」現象——
+    #      fast pool 短 L、shell-only mass、快耗盡；slow pool 長 L、core mass、慢釋出。
+    #      EY(t) 從 [60,90] 區間 ~23 m%/s 衰到 [120,150] 區間 ~1.9 m%/s 已是 12× 衰減，
+    #      由 pool 結構自然產生，無需在 pool 內部再疊一次冪次衰減。
+    #      因此 pool 內部 driving force 採 constant-area Noyes-Whitney：
+    #        C_eff = C_sat(T) × (M/M₀)^1
+    #      β > 1 的「pool 內部超線性」沒有對應的物理機制（殼層 200 μm 內無法支撐
+    #      super-linear 阻力），且實證 sweep 顯示 β=1.5 反而把 fast pool 拖到 90s 後
+    #      仍未耗盡——與杯測「fast 前段出完」的直覺相反。
+    # 候選：
+    #      β=1.0：constant-area Noyes-Whitney（預設，與 bin-resolved 自洽）
+    #      β=2/3：shrinking-core（球形粒子 A ∝ M^(2/3)），可選的更精細形式
+    #      β=1.5：歷史值，aggregate-pool 時代的補償，已不再適用
 
     # ── 修正 [8] 顆粒溶脹（Kozeny-Carman）──────────────────────────────────
     delta_phi: float = 0.02
