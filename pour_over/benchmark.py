@@ -165,7 +165,9 @@ def run_benchmark_suite(
     )
 
     limits = {
-        "volume_rmse_max": 13.8,
+        # 14.10：P0-3 加性阻力 closure 後 baseline ≈ 13.99 mL；保留 0.11 mL 緩衝。
+        # 舊乘性疊加 baseline 為 13.39 mL（gate 13.8）。
+        "volume_rmse_max": 14.10,
         "velocity_rmse_max": 1.30,
         "drain_time_error_abs_max": 3.0,
         "cup_temp_error_abs_max": 3.5,

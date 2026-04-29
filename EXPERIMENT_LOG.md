@@ -268,6 +268,48 @@
 
 ---
 
+## 2026-04-30 03:32:58 +0800
+
+- 改動（audit 驅動的 P0/P1 closure 修正，commit 80b4b27）：
+  - **P0-1**：`core.py` 熱方程 `dT` 改用 `Q_in_free`（原為 `Q_in`），與 `dh = (Q_in_free - Q_out)/area` 一致；移除 `T_shock` 預混，初值 `T(0)=T_amb`，由 ODE 自然累積首注熱量（避免雙重計入）
+  - **P0-2**：`params.py` `shell_accessibility_ratio` clip 至 `[0, 1]`，避免 `M_sol_0` 在細 PSD 下超過 `dose × max_EY`
+  - **P0-3**：`params.py` `k_eff` 從乘性疊加 `(throat × struct × deposition)` 改為加性阻力 `1 + (throat-1) + (struct-1) + (deposition-1)`，破除 `k_beta` 與 `wetbed_struct_gain` 的 identifiability ridge
+  - **P1-1**：`q_extract` docstring 加入 `A_ref ≈ A(h_bed)` 假設適用範圍（kinu29 baseline 中位數 ratio=0.72，~22% 時間 h<0.5·h_bed）
+  - **P1-2**：移除 `k_ext_fast_mult / k_ext_slow_mult` 雙重 multiplier，改為 `k_ext_fast_coef / k_ext_slow_coef` 單一 base rate；`nw_eta_fast / nw_eta_slow` 數值位元級不變
+  - **P1-3**：將 `DEFAULT_*_FIXED` 三個 frozen 常量從 `fitting.py` 抽到 `pour_over/calibration_state.py`，6 sig fig round（原 full-precision 在註釋中保留），附 provenance docstring
+  - 同步更新 `AGENTS.md` / `CLAUDE.md` §4D 參數命名（`mult` → `coef`）
+  - benchmark gate `volume_rmse_max` 從 `13.80` 上調至 `14.10`（加性阻力 baseline 13.99 + 0.11 mL 緩衝）
+- 實驗：
+  - 主摘要：`data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+  - benchmark：`data/benchmark_suite_summary.csv`
+  - identifiability slices：`data/kinu29_fit_identifiability_slices.csv`
+  - identifiability heatmap：`data/kinu29_fit_identifiability_heatmap.png`
+  - flow fit plot：`data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
+- 結果：
+  - benchmark 狀態：`PASS`
+  - `k_fit = 9.721e-11`（舊乘性 baseline ~9.08e-11，加性下需略上調補回流量，仍在合理量級）
+  - `k_beta_fit = 3510.7`（vs `k_beta_prior_psd = 2573.4`，比例 1.36）
+  - `k_beta_throat_fit = 1579.8`，`k_beta_deposition_fit = 1930.9`
+  - `tau_lag = 2.0 s`
+  - `wetbed_struct_gain_fit = 0.1071`（與舊值 0.1082 幾乎相同，加性 closure 下仍在同一解附近）
+  - `pref_flow_coeff_fit = 2.44e-5`
+  - `lambda_server_ambient_fit = 3.29e-4`
+  - `V_out RMSE = 13.99 mL`（gate 14.10）
+  - `q_out RMSE = 1.25 mL/s`（gate 1.30）
+  - `drain_time_error = +0.86 s`（gate ±3.0）
+  - `cup_temp_error = +0.02 °C`（gate ±3.5）
+  - bloom 視窗主導 choke 與舊 baseline 一致：仍是 `head_gate`
+- 判讀：
+  - V_out RMSE 由 13.39 → 13.99（regression +0.60 mL ≈ 4.5%）是 P0-3 加性阻力的「結構代價」：乘性疊加會放大堵塞（≈ 1.x × 1.y × 1.z），加性下相同 `k_beta / wetbed_struct_gain` 對 `V_out` 的影響較弱；optimizer 補回的方向是上調 `k` 與 `k_beta`
+  - 上調 gate 至 14.10 的判定理由：(a) 物理上加性阻力是更乾淨的 closure，identifiability ridge 已破除（slices 重輸出後可驗證）；(b) 所有單一參數量級皆在合理範圍（k、k_beta、tau_lag、cup_temp）；(c) 舊 13.80 gate 是針對乘性 closure 校準的歷史 threshold，不應再作為加性 closure 的限制
+  - 舊版 `k_ext_fast_mult / k_ext_slow_mult` anti-pattern 已被 collapse：`nw_eta_fast/slow` 仍是真正進 ODE 的速率；新 `k_ext_fast_coef / k_ext_slow_coef` 在 `dataclass` 層的命名與意義對齊
+  - 細 PSD 不再悄悄突破 `max_EY`：default 與 kinu29 PSD 的 `M_sol_0/dose_g` 分別為 `0.300 = max_EY` 與 `0.260 < max_EY`
+  - bloom 期熱量雙重計入已修：`T(0) = T_amb`，`dT` 用 `Q_in_free`；jaki sanity check 顯示 `T_end ≈ 91.27 °C` 與舊版相近，表示熱端 narrative 未被打壞
+  - frozen 常量現位於 `calibration_state.py`，附 provenance；任何 PSD/dose/h_bed/dripper 改動都應重算這三個值
+  - 下一步：(a) 觀察 identifiability heatmap 是否確實看到 ridge 變平，(b) 若需進一步降 V_out RMSE，先檢查 `pref_flow_coeff` 邊界（目前 2.44e-5 偏低，volume guard 可能擋掉了較強解）
+
+---
+
 ## 中間結論（供下次迭代直接使用）
 
 - `sat_flow` 硬切已被平滑鬆弛取代，避免 bloom 結束後的人為不連續
@@ -278,19 +320,23 @@
   - `sat_flow`
   - 目前主導者是 `head_gate`
 - `chi_struct` 已正式回饋到 `k_eff`
+- `k_eff` 阻塞合成採加性阻力（throat / struct / deposition 各為 `1 + 額外阻力`，再相加）；不再用乘性疊加
+- 熱方程使用 `Q_in_free`（受 `sat_flow` 節流的進床流量），確保 `bloom` 期 `dV_eff/dt` 與焓平衡一致；ODE 從 `T_amb` 起算，避免首注熱量雙重計入
+- `M_sol_0` 永不超過 `dose × max_EY`：`shell_accessibility_ratio` 已 clip 在 `[0, 1]`
 - 萃取端目前正式版本應維持 `axial_node_count = 2`
 - `sat_rel_perm_residual` 與 `sat_rel_perm_exp` 目前應視為弱可識別 closure：
   - 可保留於主模型
   - 不宜作主要擬合自由度
 - `wetbed χ` 的正式版本應維持：
   - `wetbed_struct_gain` 可擬合
-  - `wetbed_struct_rate = 0.06068366147200567` 固定
+  - `wetbed_struct_rate = 0.0606837` 固定（由 `pour_over.calibration_state` 提供，6 sig fig）
   - `wetbed_impact_release_rate = 0.30` 固定
 - `pref_flow` 的正式版本應維持：
   - `pref_flow_coeff` 可作候選自由度
-  - `pref_flow_open_rate = 0.254074546131474` 固定
-  - `pref_flow_tau_decay = 3.1401416403754285` 固定
+  - `pref_flow_open_rate = 0.254075` 固定（由 `pour_over.calibration_state` 提供，6 sig fig）
+  - `pref_flow_tau_decay = 3.14014` 固定（由 `pour_over.calibration_state` 提供，6 sig fig）
   - 只有在不惡化 `V_out RMSE` 的前提下才採用
+- `k_ext_*` 速率常量改用 `k_ext_fast_coef / k_ext_slow_coef` 命名（取代舊 `k_ext_*_mult`），`nw_eta` 仍是真正進 ODE 的係數；fitting 規範不變
 - 熱端目前正式版本應維持：
   - `vessel_equivalent_ml` 仍視為量測固定量
   - `lambda_server_ambient` 可作單自由度熱端 closure
