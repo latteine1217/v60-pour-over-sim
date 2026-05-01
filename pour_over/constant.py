@@ -72,6 +72,15 @@ class V60Constant:
 
     Cp_coffee: float = 1800.0
     # 乾咖啡粉比熱容 [J/(kg·K)]
+    # Source: Singh & Heldman, "Introduction to Food Engineering" Appendix table（roasted coffee
+    # beans 1670–1880 J/(kg·K)）；Pittia et al. 2007（"Thermophysical properties of green and
+    # roasted coffee", J. Food Eng., 80(2), 600–605）回報烘焙咖啡 1500–1900 J/(kg·K)，與含水率/
+    # 烘焙度相關。1800 取中位代表值。
+    # Sensitivity: V_equiv_coffee ∝ Cp_coffee；20 g 粉、Cp=1800 → V_equiv = 8.6 mL water-equiv，
+    # 占 V_eff_T (≈24 mL post-bloom) 約 36%。±10% Cp 變動 → ±0.86 mL V_eff_T，bloom 期升溫
+    # 速率小幅變動，但 cup_temp 會被熱端 fit (λ_liq_drip / λ_server) 自動吸收。
+    # 因此本參數視為 calibrated forward-input（與 dripper_mass_g、dripper_cp_J_gK 同列）：
+    # 不進 fitting loop；若使用者切換不同烘焙度或顯著潤濕粉，可在此調整。
 
     D10_measured_m: float | None = None
     # 若有實測 PSD，優先使用量測 D10 [m]

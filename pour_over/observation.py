@@ -54,22 +54,47 @@ def observed_stop_time_from_layer(
     threshold_mlps: float = 0.05,
 ) -> float:
     """
-    由 lag 後杯中出流推估可觀測停流時間。
+    由 lag 後杯中出流推估可觀測停流時間（sub-grid 線性插補）。
 
     What:
-        在最後一注之後，尋找 `q_cup <= threshold_mlps` 的第一個時刻。
+        在最後一注之後，找 `q_cup` 第一個跨越 `threshold_mlps` 的瞬間，
+        以線性插補返回 sub-grid 連續時間。
 
     Why:
         使用者看到的是壺內液面停止上升，不是濾床出口的瞬時停流；
         benchmark / fitting / identifiability 都應共用同一個觀測層定義。
+
+    2026-05-01 修正：原版用 `t_sim[below[0]]` 直接取 grid 點，造成 stop_time
+        以 dt = (t_end - 0) / n_eval ≈ 0.25 s 的解析度量化。loss 中
+        `weights["drain_time"] * |stop_model - stop_obs|` 因此呈現 staircase
+        ridge，subagent 審查證實這是 stages 1/2 basin 漂移的根因（非 Powell
+        tolerance 問題）。改為 sub-grid 線性插補後 stop_time 是連續變數，
+        loss surface 沿 ridge 變平滑、Powell 收斂於唯一 basin。
     """
     q_cup = np.asarray(obs_layer["q_cup_mlps"], dtype=float)
     t_sim = np.asarray(t_sim, dtype=float)
     t_last = protocol.last_pour_end()
     mask = t_sim >= t_last
-    below = np.where(mask & (q_cup <= threshold_mlps))[0]
-    if below.size:
-        return float(t_sim[below[0]])
+    indices = np.where(mask)[0]
+    if indices.size == 0:
+        return float(t_sim[-1])
+
+    # 從最後一注後第一個點開始掃，找第一段 q_cup 從 above → below threshold 的 crossing
+    for i in indices[:-1]:
+        if q_cup[i] > threshold_mlps and q_cup[i + 1] <= threshold_mlps:
+            q_hi, q_lo = float(q_cup[i]), float(q_cup[i + 1])
+            t_hi, t_lo = float(t_sim[i]), float(t_sim[i + 1])
+            denom = q_hi - q_lo
+            if denom <= 1e-12:
+                return t_lo
+            # Linear interpolation: q(t) = q_hi + (q_lo - q_hi) * (t - t_hi) / (t_lo - t_hi)
+            # Solve q(t) = threshold
+            frac = (q_hi - threshold_mlps) / denom
+            return t_hi + frac * (t_lo - t_hi)
+
+    # 第一個 grid 點就已經在 threshold 之下（極端 case：流動極早停）
+    if q_cup[indices[0]] <= threshold_mlps:
+        return float(t_sim[indices[0]])
     return float(t_sim[-1])
 
 

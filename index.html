@@ -665,7 +665,7 @@ canvas{display:block;width:100%;height:auto}
           <div class="tech-grid">
             <div class="tech-card">
               <strong>State Layer</strong>
-            `h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct`
+            `h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref`
             </div>
             <div class="tech-card">
               <strong>Closure Layer</strong>
@@ -1005,7 +1005,7 @@ canvas{display:block;width:100%;height:auto}
           <div class="showcase-list">
             <div class="showcase-item">
               <strong>State Vector</strong>
-              `h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct`
+              `h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref`
             </div>
             <div class="showcase-item">
               <strong>Primary Outputs</strong>
@@ -1019,7 +1019,7 @@ canvas{display:block;width:100%;height:auto}
         </div>
         <div class="story-copy">
           <div class="eq-label">Core State</div>
-          <div class="eq">state = [h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct]</div>
+          <div class="eq">state = [h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref]</div>
           <div class="eq-label" style="margin-top:14px">Hydraulic Output Layer</div>
           <div class="eq eq-b">
             Q_ext, Q_bp, k_eff, sat, h, brew_time, drain_time, throat/deposition clog diagnostics

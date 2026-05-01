@@ -223,7 +223,11 @@ class V60Params(V60Constant):
     # 可逆壓實的半飽和自由水柱高度 [m]
 
     wetbed_irr_gain: float = 0.22
-    # bloom 後注水造成的即時附加沉積強度；量級刻意小於可逆項
+    # bloom 後注水造成的即時附加沉積強度；量級刻意小於可逆項。
+    # FROZEN（2026-04-30）：identifiability scan 顯示此參數在 [0.7×, 1.3×]
+    # 範圍 Δloss span 僅 0.36（純平 ridge），不應作為 fitting 自由度。
+    # 預設 0.22 為當前 kinu29 light 20 g baseline 的工作值；除非更換 PSD/
+    # dose/dripper 顯著破壞 baseline，否則不應改動。
 
     wetbed_irr_qin_ref: float = 6.0e-6
     # bloom 後注水擾動參考流量 [m³/s]（≈ 6 mL/s）
@@ -231,28 +235,11 @@ class V60Params(V60Constant):
     wetbed_irr_u_ref: float = 0.012
     # bloom 後注水擾動參考孔隙流速 [m/s]
 
-    # ── bloom 後濕床重堆積狀態（動態版）────────────────────────────────────
-    wetbed_struct_gain: float = 0.0
-    # 結構態增益；預設 0 維持相容性，設為 >0 時才啟用 χ 對 k_eff 的回饋
-
-    wetbed_struct_rate: float = 0.0
-    # 結構態建立速率；預設 0 維持相容性
-
-    wetbed_struct_qin_half: float = 4.5e-6
-    # 重堆積建立的半飽和注水流量 [m³/s]（約 4.5 mL/s）
-
-    wetbed_struct_h_half: float = 0.012
-    # 重堆積建立的半飽和自由水柱高度 [m]
-
-    wetbed_struct_tau_relax: float = 42.0
-    # 無額外沖擊時，結構緩慢自行鬆回的時間尺度 [s]
-
-    wetbed_impact_release_rate: float = 0.0
-    # 結構態釋放速率；預設 0 維持相容性
-
-    wetbed_impact_gain: float = 1.7
-    # 每一注開始時的沖擊脈衝權重；代表中心沖擊先把結構打開
-
+    # ── 注水脈衝記憶寬度 ──────────────────────────────────────────────────────
+    # χ 結構態（wetbed_struct_*）在 P0/P1 重構中已併入 f_irr / throat_relief，
+    # 完整移除（identifiability log 顯示 gain × rate 為平 ridge）。
+    # `wetbed_impact_tau` 仍保留：用於 `pour_start_impact` 與 `throat_relief_factor`、
+    # `q_preferential` 的脈衝寬度。
     wetbed_impact_tau: float = 2.0
     # 注水起始沖擊的記憶寬度 [s]
 
@@ -323,18 +310,28 @@ class V60Params(V60Constant):
     lambda_cool: float = 3.7e-4
     # Newton 冷卻係數 λ [1/s]
     # 估算：典型手沖冷卻 ~1.5°C/min，ΔT_0 = 68°C → λ ≈ 1.5/(60×68) ≈ 3.7e-4
+    # FROZEN（2026-04-30）：thermal identifiability scan 顯示此 λ 在 [0.7×, 1.3×]
+    # 範圍 cup ΔT swing 僅 0.06 °C（純平 ridge）；保留為預設值，不進入 fitting。
 
     lambda_liquid_dripper: float = 0.0
     # 液體與濾杯間的等效熱交換係數 [1/s]
     # Why: 補上液體對濾杯持續放熱，而不只在終點把容器當一次性混杯熱沉
+    # FIT（2026-04-30）：thermal identifiability scan 顯示此 λ 為熱端最強自由度
+    # （cup ΔT swing 0.77 °C），由 `fit_k_kbeta_from_flow_profile` stage 6 校準；
+    # `MEASURED_LIQUID_DRIPPER_LAMBDA = 0.02` 改作 initial guess 與弱 prior reg 中心。
 
     lambda_dripper_ambient: float = 0.0
     # 濾杯對環境自然對流冷卻係數 [1/s]
     # Why: 使用者傾向忽略濾紙，改由濾杯本體與空氣自然對流承擔額外散熱
+    # FROZEN（2026-04-30）：thermal identifiability scan 顯示此 λ 在 [0.7×, 1.3×]
+    # 範圍 cup ΔT swing 僅 0.12 °C（弱可識別）；保留為量測 baseline (0.004)。
 
     lambda_server_ambient: float = 0.0
     # 分享壺 / 杯中混合液對環境自然對流冷卻係數 [1/s]
     # Why: 床內與濾杯熱節點只能描述 cone 內冷卻；最後飲用溫度還需壺端散熱
+    # FIT（2026-04-30）：identifiability medium（cup ΔT swing 0.52 °C），
+    # 與 `lambda_liquid_dripper` 沿對角線存在 mild ridge（Δloss span ~0.16），
+    # sequential fit (stage 5 → stage 6) 可同時校準兩者。
 
     Ea_ext: float = 25000.0
     # 萃取活化能 Ea [J/mol]（~25 kJ/mol）
@@ -762,7 +759,14 @@ class V60Params(V60Constant):
 
             A_total_i = sv_m_inv * V_solid_i
             A_fast_i = A_total_i * shell_acc
-            A_slow_i = A_total_i
+            # A_slow_i = core-surface area
+            # Why: slow pool 由 core 表面釋出溶質到 bulk，瓶頸在 core surface 而非
+            #      整個 particle outer surface。`(1 - shell_acc)^(2/3)` 對應球形
+            #      殘存核心的相對 surface area（核心半徑 ∝ (1-shell)^(1/3)，面積 ∝ 半徑²）。
+            # 2026-05-01 P0 修正：原 `A_slow_i = A_total_i` 不真實放大 slow 介面，
+            #      讓 slow A 比 fast A 還大，與物理直覺相反。subagent 萃取審計指出此問題。
+            core_surface_factor = max(1.0 - shell_acc, 0.0) ** (2.0 / 3.0)
+            A_slow_i = A_total_i * max(core_surface_factor, 0.05)
 
             area_fast_list.append(A_fast_i)
             area_slow_list.append(A_slow_i)
@@ -944,16 +948,21 @@ class V60Params(V60Constant):
         self.ref_psd_fast_pool_fraction = ref_particle.get("fast_pool_fraction", np.nan)
         # 固相溶質耗盡模型
         # 多組分可萃量分流：
-        # - fast pool 主要來自外層較易接觸的可溶物，因此直接吃 shell penalty
-        # - slow pool 代表較深層、較慢釋出的可溶物，不應被 200 μm outer-shell 假設全額砍掉
-        #   這裡採用較溫和的 blended accessibility，避免把整體可萃量壓得過低
+        # - fast pool 主要來自外層較易接觸的可溶物，吃完整 shell penalty
+        # - slow pool 代表較深層、較慢釋出的可溶物，受 shell penalty 影響但較弱
+        # 2026-05-01 P1 修正：原 slow_access_ratio = 0.5*(1+shell_ratio) 在 shell_ratio→0
+        #   時還保留 0.5 floor，物理上不合理（shell 完全堵死時 slow pool 不該還有 50% 可萃）。
+        #   改為 `slow_access_ratio = shell_ratio ** alpha_slow_access`，alpha < 1 表示
+        #   slow 對 shell penalty 比 fast 弱（fast 是 alpha=1）。預設 alpha=0.7。
         if np.isfinite(self.psd_fast_pool_fraction) and np.isfinite(self.ref_psd_fast_pool_fraction):
             psd_fast_shift = (self.psd_fast_pool_fraction / max(self.ref_psd_fast_pool_fraction, 1e-12)) ** 0.25
         else:
             psd_fast_shift = 1.0
         self.fast_fraction_effective = float(np.clip(self.fast_fraction * psd_fast_shift, 0.12, 0.78))
         fast_access_ratio = self.shell_accessibility_ratio
-        slow_access_ratio = 0.5 * (1.0 + self.shell_accessibility_ratio)
+        # alpha_slow_access = 0.7：slow pool 對 shell penalty 的次方，0=完全免疫、1=和 fast 一樣
+        alpha_slow_access = 0.7
+        slow_access_ratio = max(self.shell_accessibility_ratio, 1e-6) ** alpha_slow_access
         self.M_fast_0 = self.dose_g * self.max_EY * self.fast_fraction_effective * fast_access_ratio
         self.M_slow_0 = self.dose_g * self.max_EY * (1.0 - self.fast_fraction_effective) * slow_access_ratio
         self.M_sol_0 = self.M_fast_0 + self.M_slow_0
@@ -1487,83 +1496,10 @@ class V60Params(V60Constant):
         f_gate = 1.0 - gate * (1.0 - f_mix)
         return float(np.clip(f_gate, 0.2, 1.0))
 
-    def d_wetbed_struct_dt(
-        self,
-        struct_state: float,
-        q_in: float,
-        h: float,
-        pour_impact: float,
-        t_sec: float,
-        bloom_end_s: float | None,
-    ) -> float:
-        """
-        bloom 後濕床重堆積狀態的動態方程。
-
-        What:
-            dχ/dt = build(q_in, h_free) - release(impact, χ) - relax(χ)
-
-            χ ∈ [0, 1]：
-            - χ ↑：注水與過床流動使粉床重新堆積、細粉回填，阻力上升
-            - χ ↓：每一注開始的中心沖擊把結構重新沖散，阻力暫時下降
-
-        Why:
-            使用者實際操作是在每一注開始時刻意沖開中心粉床，接著粉層又重堆積。
-            這個狀態就是用來寫下這個「沖散 → 回填」的記憶，而不是平均成恆定 q_in。
-        """
-        gate = self.post_bloom_gate(t_sec, bloom_end_s)
-        if gate <= 1e-6:
-            return 0.0
-
-        chi = float(np.clip(struct_state, 0.0, 1.0))
-        q_pos = max(float(np.nan_to_num(q_in, nan=0.0, posinf=0.0, neginf=0.0)), 0.0)
-        h_drive = max(h, 0.0)
-
-        S_q = q_pos / (q_pos + self.wetbed_struct_qin_half)
-        S_impact = np.clip(pour_impact, 0.0, 1.0)
-        # 只要 bloom 後是濕床，結構就會被注水與過床流動重排；
-        # 不應強制要求自由水柱超過粉層頂部。
-        S_h = h_drive / (h_drive + self.wetbed_struct_h_half)
-        build = gate * self.wetbed_struct_rate * S_q * S_h * (1.0 - chi)
-
-        release = gate * self.wetbed_impact_release_rate * self.wetbed_impact_gain * S_impact * chi
-        relax = gate * chi / max(self.wetbed_struct_tau_relax, 1e-6)
-        return build - release - relax
-
-    def wetbed_struct_factor(
-        self,
-        struct_state: float,
-        t_sec: float,
-        bloom_end_s: float | None,
-    ) -> float:
-        """
-        bloom 後濕床重堆積對滲透率的抑制倍率。
-
-        What: f_struct = 1 / (1 + gate * gain * χ)
-        Why:  阻塞程度屬於介質結構性質，不應混進壓力頭項。
-        """
-        gate = self.post_bloom_gate(t_sec, bloom_end_s)
-        chi = float(np.clip(struct_state, 0.0, 1.0))
-        return 1.0 / (1.0 + gate * self.wetbed_struct_gain * chi)
-
-    def wetbed_struct_throat_term(
-        self,
-        struct_state: float,
-        t_sec: float,
-        bloom_end_s: float | None,
-    ) -> float:
-        """
-        bloom 後可逆喉道阻塞項。
-
-        What:
-            throat_struct = 1 + gate * gain * chi
-
-        Why:
-            使用者的中心沖擊主要是在「打開孔喉」，不會立即抹除已沉積的細粉。
-            因此這個狀態應只作用在 throat clogging，而不是整體 k_eff 乘子。
-        """
-        gate = self.post_bloom_gate(t_sec, bloom_end_s)
-        chi = float(np.clip(struct_state, 0.0, 1.0))
-        return 1.0 + gate * self.wetbed_struct_gain * chi
+    # NOTE: 已刪除 `d_wetbed_struct_dt` / `wetbed_struct_factor` /
+    # `wetbed_struct_throat_term`（P0/P1 refactor）。
+    # χ 動力學被併入 `wetbed_postbloom_factor`（其 f_irr 與舊 throat_struct
+    # 物理敘事重複），且 identifiability log 顯示其自由度為平 ridge。
 
     def d_preferential_flow_dt(
         self,
@@ -1672,55 +1608,55 @@ class V60Params(V60Constant):
         u_pore: float = 0.0,
         t_sec: float = 0.0,
         bloom_end_s: float | None = None,
-        wetbed_struct_state: float = 0.0,
         pour_impact: float = 0.0,
     ):
         """
-        綜合有效滲透率：喉道阻塞/結構記憶/沉積（加性阻力疊加）× 顆粒溶脹（Kozeny-Carman）× 壓差壓實
+        綜合有效滲透率：喉道阻塞 + bloom 後濕床重排 + 沉積（全部加性阻力）× 顆粒溶脹（Kozeny-Carman）
 
         What:
-              k_eff(V_out, sat, h)
-            = k_clog(V_out, impact, chi) × k_kc(sat, h) × f_post(q_in, u, h)
-              k_clog = k0 / resistance_total
-              resistance_total = 1 + (throat_eff - 1) + (throat_struct - 1) + (deposition - 1)
-              k_kc  = (φ_eff/φ₀)³·((1-φ₀)/(1-φ_eff))²
-              φ_eff = φ₀ - Δφ_sat·sat - Δφ_p·head_ratio
-              f_post: bloom 後濕床重排（可逆壓實 × 小幅即時沉積）
-              throat_eff = 1 + (throat_irrev - 1) × relief(impact)
-              throat_struct = 1 + gate_post · gain_struct · chi
+              k_eff(V_out, sat, h, q_in, u, t, impact)
+            = (k / R_total) × k_kc(sat, h)
+              R_total = 1 + (throat_eff − 1)
+                          + (deposition − 1)
+                          + (1/f_post − 1)
+              throat_eff = 1 + (throat_irrev − 1) × relief(impact)
+              f_post     = f_rev(u, h) · f_irr(q_in, u)，∈ [0.2, 1]
+              k_kc       = (φ_eff/φ₀)³ · ((1−φ₀)/(1−φ_eff))²
 
-        Why: 兩個機制完全獨立：
-             - throat clogging：細粉優先卡喉道；每一注開始可被中心沖擊短暫打開
-             - deposition：更慢、較不可逆的沉積/回填
-             - 顆粒溶脹：由飽和度驅動，悶蒸期就啟動
-             - 壓差壓實：由床頂/床底壓差驅動，排水後可逆恢復
-             - 濕床重排：只在 bloom 後由流速與自由水柱觸發
-             解耦後，k_beta 只代表「細粉量」，delta_phi 只代表「纖維膨脹度」，
-             讓參數的物理意義更純粹，擬合偏差更小。
-
-             改採加性阻力疊加：Darcy 阻力本質為各機制阻力相加，每個 (term - 1)
-             代表該機制相對於無堵塞 baseline 的額外阻力分量。原本的乘性疊加會把
-             小擾動相互放大，造成 k_beta 與 wetbed_struct_gain 在 fitting 上出現
-             identifiability ridge（EXPERIMENT_LOG.md 已記錄）。
-             注意：此改動會偏移既有 k_beta / wetbed_struct_gain 校準值，需重新擬合。
+        Why:
+             1. 全加性阻力。Darcy 阻力本質就是各機制相對 baseline 的額外阻力相加。
+                先前 `× f_post` 仍為乘性，會在 wetbed 軸上重新製造 ridge，
+                與 throat / deposition 的可區分性受損。將 `f_post` 改寫為
+                `(1/f_post − 1)` 進總阻力後，三者語意一致：每一項都是
+                「這個機制讓阻力增加多少」。
+             2. 砍掉 `wetbed_struct_throat_term`。其物理敘事與 `f_irr`
+                重複（皆為 bloom 後的「濕床壓實/即時沉積」），且 identifiability log
+                已多次記錄 `wetbed_struct_gain × rate` 平 ridge，被迫凍結 rate。
+                重複機制不該以兩個自由度同時存在。
+             3. `kc` 是 porosity → permeability 的 constitutive 關係，
+                屬於介質本身的性質，仍以乘性 outside R_total 表示。
+             注意：此次改動會再次偏移 k / k_beta / wetbed_irr_gain / wetbed_rev_gain
+                  的校準值，需重新 measured fit。
 
         TODO: 加入攪動項：dk/dt = -beta_agit·Q_in·k（高 Q_in 時細粉遷移更快）
         """
         throat_term, deposition_term = self.k_beta_components(V_out)
         throat_relief = self.throat_relief_factor(pour_impact, t_sec, bloom_end_s)
         throat_eff = 1.0 + (throat_term - 1.0) * throat_relief
-        throat_struct = self.wetbed_struct_throat_term(wetbed_struct_state, t_sec, bloom_end_s)
         phi_sw = self.phi_effective(sat, h)
         kc = (phi_sw / self.phi)**3 * ((1.0 - self.phi) / (1.0 - phi_sw))**2
         f_post = self.wetbed_postbloom_factor(q_in, u_pore, h or 0.0, t_sec, bloom_end_s)
-        # 加性阻力疊加：各機制的 (term - 1) 為相對 baseline 的額外阻力，總阻力為三者相加
+        # f_post ∈ [0.2, 1.0]（已被 wetbed_postbloom_factor 內部 clip）。
+        # 將乘性 `× f_post` 等價轉為加性 `(1/f_post − 1)`：在 baseline (f_post=1) 時為 0，
+        # 與 throat / deposition 的 `(term − 1)` 同構。
+        f_post_safe = max(float(f_post), 1e-3)
         resistance_extra = (
             (throat_eff - 1.0)
-            + (throat_struct - 1.0)
             + (deposition_term - 1.0)
+            + (1.0 / f_post_safe - 1.0)
         )
         resistance_total = 1.0 + resistance_extra
-        return self.k / resistance_total * kc * f_post
+        return self.k / resistance_total * kc
 
     def psi_eff(self, V_out) -> float:
         """
@@ -1778,18 +1714,20 @@ class V60Params(V60Constant):
 
         Why: 0D 模型無法直接解球坐標 PDE，但仍需要把「核心溶質傳得較慢」
              這件事折進速率方程。
+
+        2026-05-01 P0 修正：原 `path_eff = ref_path · sqrt(path/ref_path)` 把
+            指數內 path 從二次降到一次，缺乏物理依據；對粗 bin 的 diffusion 阻力
+            嚴重低估（subagent 萃取審計指出粗 bin 應有完整 path² 懲罰）。
+            改回 Fickian: `diff = exp(-path² / 4Dt)`。
+            為避免 reduced-order 0D 模型對 slow 在 t→0 時瞬時壓成零，
+            改以 `t_eff = max(t_sec, t_floor)` 的方式處理 — t_floor 從 0.5 s
+            提高到 5 s（典型 first-pour 滴流時間量級），讓 slow 在 first-drip
+            就有合理的擴散時間積累。
         """
-        t_eff = max(t_sec, 0.5)
+        t_eff = max(t_sec, 5.0)
         D_eff = max(self.diffusion_coeff(T_K, slow=slow), 1e-18)
         path = self.diffusion_path_slow_m if slow else self.diffusion_path_fast_m
-        ref_path = self.ref_diffusion_path_slow_m if slow else self.ref_diffusion_path_fast_m
-        # `A*D/L` 已經顯式吃掉一次路徑尺度；若這裡再用完整 path² 懲罰，
-        # measured-bin 會對粗顆粒/深核心產生過重的雙重打折。
-        # 因此採用相對於 reference path 的平方根壓縮，保留「更深更慢」，
-        # 但避免 reduced-order 0D 模型把 slow 組分幾乎壓成 0。
-        path_ratio = max(path / max(ref_path, 1e-18), 0.1)
-        path_eff = ref_path * np.sqrt(path_ratio)
-        return float(np.exp(-(path_eff ** 2) / max(4.0 * D_eff * t_eff, 1e-18)))
+        return float(np.exp(-(path ** 2) / max(4.0 * D_eff * t_eff, 1e-18)))
 
     def internal_diffusion_factor_path(self, t_sec: float, T_K: float, path_m: float, ref_path_m: float, slow: bool = False) -> float:
         """
@@ -1797,12 +1735,14 @@ class V60Params(V60Constant):
 
         What: 與 `internal_diffusion_factor()` 相同，但路徑由各 PSD bin 顯式提供。
         Why:  measured PSD 要真正進 bin-resolved ODE，就必須讓每個 bin 有自己的 diffusion path。
+
+        2026-05-01 P0 修正：刪除 `sqrt(path_ratio)` 壓縮，回到 Fickian
+            `diff = exp(-path² / 4Dt)`。`ref_path_m` 參數保留為 API 相容性
+            但不再被使用。
         """
-        t_eff = max(t_sec, 0.5)
+        t_eff = max(t_sec, 5.0)
         D_eff = max(self.diffusion_coeff(T_K, slow=slow), 1e-18)
-        path_ratio = max(path_m / max(ref_path_m, 1e-18), 0.1)
-        path_eff = ref_path_m * np.sqrt(path_ratio)
-        return float(np.exp(-(path_eff ** 2) / max(4.0 * D_eff * t_eff, 1e-18)))
+        return float(np.exp(-(path_m ** 2) / max(4.0 * D_eff * t_eff, 1e-18)))
 
     # ── 修正 [1][9] 達西萃取（C∞ 平滑過渡 + 毛細管壓門檻） ──────────────────
     def q_extract(self, h, k_val=None, T_K=None, t_sec: float = 0.0, sat=None):

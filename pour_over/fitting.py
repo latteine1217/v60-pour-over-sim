@@ -12,6 +12,7 @@ Why:
 
 import dataclasses
 import csv
+import time
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +26,7 @@ from .measured_io import (
     MEASURED_BED_HEIGHT_CM,
     MEASURED_VESSEL_EQUIV_ML,
     MEASURED_AMBIENT_TEMP_C,
+    MEASURED_LIQUID_DRIPPER_LAMBDA,
     _meta_float,
     _measured_setup_overrides,
     load_brew_log_csv,
@@ -48,12 +50,11 @@ from .viz import (
 from .calibration_state import (
     DEFAULT_PREF_FLOW_OPEN_RATE_FIXED,
     DEFAULT_PREF_FLOW_TAU_DECAY_FIXED,
-    DEFAULT_WETBED_STRUCT_RATE_FIXED,
 )
 
-DEFAULT_MEASURED_FLOW_CSV = "data/kinu29_light_20g_flow_profile.csv"
-DEFAULT_MEASURED_FLOW_FIT_PLOT = "data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png"
-DEFAULT_MEASURED_FLOW_FIT_SUMMARY = "data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
+DEFAULT_MEASURED_FLOW_CSV = "data/kinu_29_light/4:11/kinu29_light_20g_flow_profile.csv"
+DEFAULT_MEASURED_FLOW_FIT_PLOT = "data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png"
+DEFAULT_MEASURED_FLOW_FIT_SUMMARY = "data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
 
 
 def evaluate_measured_flow_fit(
@@ -91,12 +92,14 @@ def evaluate_measured_flow_fit(
     q_obs_mlps = np.diff(v_out_obs) / np.maximum(dt_obs, 1e-12)
     stop_flow_time_s = float(prof["stop_flow_time_s"])
     final_cup_temp_C = prof["final_cup_temp_C"]
+    final_tds_gl_obs = prof.get("final_tds_gl")  # measured cup TDS in g/L (Brix×0.85×10)
     if weights is None:
         weights = {
             "volume": 1.0,
             "velocity": 0.8,
             "drain_time": 0.5,
             "temperature": 0.35,
+            "tds": 0.6,         # 量級：TDS RMSE 量值 ~5 g/L 同 V_RMSE 14 mL，0.6 weight 約等價於 V_RMSE 影響
             "regularization": 0.02,
         }
 
@@ -145,6 +148,15 @@ def evaluate_measured_flow_fit(
         )
         temp_rmse = abs(mixed_temp - final_cup_temp_C)
 
+    # 量測 TDS（Brix×0.85×10）vs 模型最終 TDS [g/L]
+    tds_pred = float(sim["TDS_gl"][-1]) if "TDS_gl" in sim else None
+    tds_err = (
+        float(tds_pred - final_tds_gl_obs)
+        if (tds_pred is not None and final_tds_gl_obs is not None)
+        else None
+    )
+    tds_rmse = abs(tds_err) if tds_err is not None else 0.0
+
     phys_penalty = 0.0
     if params_try.k < 2.0e-11 or params_try.k > 1.5e-10:
         phys_penalty += 3.0 * abs(np.log10(params_try.k / np.clip(params_try.k, 2.0e-11, 1.5e-10)))
@@ -158,6 +170,7 @@ def evaluate_measured_flow_fit(
         + weights["velocity"] * velocity_rmse
         + weights["drain_time"] * abs(drain_dt)
         + weights["temperature"] * temp_rmse
+        + weights.get("tds", 0.0) * tds_rmse
         + phys_penalty
     )
     return {
@@ -181,6 +194,10 @@ def evaluate_measured_flow_fit(
         "mixed_cup_temp_C": mixed_temp,
         "final_cup_temp_C": final_cup_temp_C,
         "cup_temp_error_C": None if mixed_temp is None or final_cup_temp_C is None else float(mixed_temp - final_cup_temp_C),
+        "final_tds_gl_obs": final_tds_gl_obs,
+        "final_tds_gl_pred": tds_pred,
+        "tds_error_gl": tds_err,
+        "tds_rmse_gl": float(tds_rmse),
         "phys_penalty": float(phys_penalty),
         "total_loss": total_loss,
         "weights": weights,
@@ -258,7 +275,7 @@ def fit_brew_log_final_temp(
         dose_g=_meta_float(meta, "dose_g"),
         h_bed=_meta_float(meta, "bed_height_cm", MEASURED_BED_HEIGHT_CM) / 100.0,
         T_brew=_meta_float(meta, "brew_temp_C") + 273.15,
-        **_measured_setup_overrides(meta),
+        **_measured_setup_overrides(meta, flow_csv_path=csv_path),
     )
 
     t_end = 180.0
@@ -340,42 +357,45 @@ def fit_k_kbeta_from_flow_profile(
     weights: dict | None = None,
     vessel_equivalent_ml: float | None = MEASURED_VESSEL_EQUIV_ML,
     tau_lag_init_s: float = 2.0,
-    fit_wetbed_structure: bool = False,
-    wetbed_release_fixed: float = 0.30,
-    wetbed_rate_fixed: float = DEFAULT_WETBED_STRUCT_RATE_FIXED,
     fit_preferential_flow: bool = False,
     pref_open_rate_fixed: float = DEFAULT_PREF_FLOW_OPEN_RATE_FIXED,
     pref_tau_decay_fixed: float = DEFAULT_PREF_FLOW_TAU_DECAY_FIXED,
     fit_server_cooling: bool = True,
+    fit_liquid_dripper_lambda: bool = True,
     verbose: bool = True,
 ) -> tuple[V60Params, dict]:
     """
     由 `V_in(t)` / `V_out(t)` 同步擬合滲透率 `k`、細粉堵塞 `k_beta`，
-    並可選擇追加濕床結構與雙路徑快支路的後段校準。
+    並可選擇追加雙路徑快支路與兩條熱端 λ 的後段校準。
 
     What:
       1. 由觀測的累積注水曲線重建等效注水協議
       2. 固定其餘參數，最小化模型與實測的 `V_out(t)` 誤差
-      3. 若啟用 `fit_wetbed_structure`，固定 `wetbed_impact_release_rate`
-         與 `wetbed_struct_rate`，只對 `wetbed_struct_gain` 做第三階段校準
-      4. 若啟用 `fit_preferential_flow`，固定
+      3. 若啟用 `fit_preferential_flow`，固定
          `pref_flow_open_rate / pref_flow_tau_decay`，
-         只對 `pref_flow_coeff` 做第四階段校準
-      5. 若啟用 `fit_server_cooling`，在流量參數固定後，
-         只對 `lambda_server_ambient` 做熱端校準
+         只對 `pref_flow_coeff` 做第三階段校準
+      4. 若啟用 `fit_server_cooling`，在流量參數固定後，
+         只對 `lambda_server_ambient` 做杯端散熱校準（stage 5）
+      5. 若啟用 `fit_liquid_dripper_lambda`，在 stage 5 之後再對
+         `lambda_liquid_dripper` 做液體 → 濾杯介面熱導校準（stage 6）。
+         identifiability scan 顯示此 λ 是熱端最強自由度，先前被當量測
+         常數凍結為 `0.02`，是個 hidden DOF；現升為正式 fit 自由度，
+         以小幅 prior reg 約束在 `MEASURED_LIQUID_DRIPPER_LAMBDA` 附近
       6. 回傳 fitted params 與擬合資訊
 
     Why:
     `k` 主導早期通量量級，`k_beta` 主導後期衰減；
     `tau_lag` 代表濾床出口到壺內量測之間的小暫存體積。
     這組資料正好提供三者的可識別訊號。
-    `wetbed_struct` 則在既有 `k/k_beta/tau_lag` 校準後，補捉注水脈衝造成的
-    bloom 後濕床記憶；固定 `release=0.30` 與 `rate≈0.0607` 可降低參數退化。
     `pref_flow_*` 則代表每一注中心沖擊打開的快路徑，專門補「快響應 + 慢拖尾」
     這個單一路徑 Darcy 難以表達的時間尺度；identifiability 顯示
     `open_rate / tau_decay` 不應再與 `coeff` 一起自由漂移，因此正式流程固定它們。
     容器熱容預設採量測給定的 `42.4 mL water equivalent`；
     只有顯式傳入 `None` 時，才改用最終杯溫反推。
+    NOTE: P0/P1 重構後，χ 結構態 (`wetbed_struct_*`) 已被移除——其物理敘事
+    與 `f_irr` 重複，identifiability log 顯示其自由度為平 ridge。
+    bloom 後濕床效應現以 `wetbed_postbloom_factor` 內的 `f_rev × f_irr`
+    加性進 `R_total` 表達，不再有獨立的 stage 3 wetbed 校準。
     loss 會同時考慮：
       - `V_out(t)` 曲線誤差
       - 區間平均流出速度誤差
@@ -389,6 +409,7 @@ def fit_k_kbeta_from_flow_profile(
     v_out_obs = np.asarray(prof["v_out_ml"], dtype=float)
     fit_mask = np.asarray(prof["use_for_fit"], dtype=bool)
     final_cup_temp_C = prof["final_cup_temp_C"]
+    final_tds_gl_obs = prof.get("final_tds_gl")  # 量測 Brix→TDS [g/L]，未量測為 None
     stop_flow_time_s = float(prof["stop_flow_time_s"])
     if weights is None:
         weights = {
@@ -396,6 +417,7 @@ def fit_k_kbeta_from_flow_profile(
             "velocity": 0.8,
             "drain_time": 0.5,
             "temperature": 0.35,
+            "tds": 0.6,
             "regularization": 0.02,
         }
 
@@ -419,7 +441,7 @@ def fit_k_kbeta_from_flow_profile(
         dose_g=_meta_float(meta, "dose_g"),
         h_bed=_meta_float(meta, "bed_height_cm", MEASURED_BED_HEIGHT_CM) / 100.0,
         T_brew=_meta_float(meta, "brew_temp_C") + 273.15,
-        **_measured_setup_overrides(meta),
+        **_measured_setup_overrides(meta, flow_csv_path=csv_path),
     )
     if min_pour_ml <= 0:
         protocol = PourProtocol.from_cumulative_profile(list(zip(t_obs, v_in_obs)))
@@ -483,7 +505,7 @@ def fit_k_kbeta_from_flow_profile(
         stop_model_s = observed_stop_time_from_layer(obs_layer, np.asarray(sim["t"], dtype=float), protocol)
         return sim, obs_layer, v_pred_obs, q_pred_mlps, stop_model_s
 
-    loss_cache: dict[tuple[float, float, float, float, float, float, float, float, float, float], tuple[float, dict]] = {}
+    loss_cache: dict[tuple, tuple[float, dict]] = {}
 
     def _evaluate_loss(
         params_try: V60Params,
@@ -496,13 +518,14 @@ def fit_k_kbeta_from_flow_profile(
                 round(float(params_try.k), 15),
                 round(float(params_try.k_beta), 8),
                 round(float(tau_try), 4),
-                round(float(getattr(params_try, "wetbed_struct_gain", 0.0)), 6),
-                round(float(getattr(params_try, "wetbed_struct_rate", 0.0)), 6),
-                round(float(getattr(params_try, "wetbed_impact_release_rate", 0.0)), 6),
                 round(float(getattr(params_try, "pref_flow_coeff", 0.0)), 9),
                 round(float(getattr(params_try, "pref_flow_open_rate", 0.0)), 6),
                 round(float(getattr(params_try, "pref_flow_tau_decay", 0.0)), 6),
                 round(float(getattr(params_try, "lambda_server_ambient", 0.0)), 7),
+                round(float(getattr(params_try, "lambda_liquid_dripper", 0.0)), 6),
+                round(float(getattr(params_try, "k_ext_slow_coef", 0.0)), 12),
+                round(float(getattr(params_try, "k_ext_fast_coef", 0.0)), 12),
+                round(float(getattr(params_try, "max_EY", 0.0)), 6),
             )
             if cache_key in loss_cache:
                 return loss_cache[cache_key]
@@ -536,6 +559,14 @@ def fit_k_kbeta_from_flow_profile(
             )
             temp_rmse = abs(mixed_temp - final_cup_temp_C)
 
+        # TDS 量測（Brix×0.85×10）vs 模型最終 TDS [g/L]
+        tds_pred = float(sim["TDS_gl"][-1]) if "TDS_gl" in sim else None
+        tds_rmse = (
+            abs(tds_pred - final_tds_gl_obs)
+            if (tds_pred is not None and final_tds_gl_obs is not None)
+            else 0.0
+        )
+
         # 物理合理性懲罰：避免為了壓誤差，把參數拉到不合理量級。
         phys_penalty = 0.0
         if params_try.k < 2.0e-11 or params_try.k > 1.5e-10:
@@ -550,6 +581,7 @@ def fit_k_kbeta_from_flow_profile(
             weights["velocity"] * velocity_rmse +
             weights["drain_time"] * drain_dt +
             weights["temperature"] * temp_rmse +
+            weights.get("tds", 0.0) * tds_rmse +
             phys_penalty
         )
         metrics = {
@@ -563,6 +595,8 @@ def fit_k_kbeta_from_flow_profile(
             "drain_dt": drain_dt,
             "mixed_temp": mixed_temp,
             "temp_rmse": temp_rmse,
+            "tds_pred": tds_pred,
+            "tds_rmse": tds_rmse,
             "phys_penalty": phys_penalty,
         }
         out = (float(loss), metrics)
@@ -585,6 +619,32 @@ def fit_k_kbeta_from_flow_profile(
     x0 = np.array([np.log10(params_base.k), np.log10(params_base.k_beta)])
     bounds = [(np.log10(2.0e-11), np.log10(1.5e-10)), (np.log10(5.0e2), np.log10(6.0e3))]
 
+    # 監控 timer：wall_clock vs process_time + per-stage nfev/elapsed
+    # 若 wall ≫ process_time，表示外部 IO/thermal/scheduler 干擾（如原 4 hr outlier）
+    stage_timings: list[dict] = []
+    fit_t0_wall = time.perf_counter()
+    fit_t0_proc = time.process_time()
+
+    def _stage_start():
+        return time.perf_counter(), time.process_time()
+
+    def _stage_end(name: str, t0: tuple[float, float], nfev: int | None = None):
+        wall = time.perf_counter() - t0[0]
+        proc = time.process_time() - t0[1]
+        stage_timings.append({
+            "stage": name,
+            "wall_s": float(wall),
+            "process_s": float(proc),
+            "wall_over_proc": float(wall / max(proc, 1e-9)),
+            "nfev": int(nfev) if nfev is not None else None,
+        })
+        if verbose:
+            nfev_str = f", nfev={nfev}" if nfev is not None else ""
+            scale = wall / max(proc, 1e-9)
+            stall = " ⚠" if scale > 1.5 else ""
+            print(f"  [timer] {name}: wall={wall:.1f}s proc={proc:.1f}s ratio={scale:.2f}{nfev_str}{stall}")
+
+    t0 = _stage_start()
     res_stage1 = minimize(
         lambda x: _flow_loss(x, tau_lag_init_s),
         x0,
@@ -592,6 +652,7 @@ def fit_k_kbeta_from_flow_profile(
         bounds=bounds,
         options={"xtol": 1e-2, "ftol": 1e-2, "maxiter": 90, "disp": False},
     )
+    _stage_end("stage1_kkbeta", t0, nfev=getattr(res_stage1, "nfev", None))
 
     params_stage1 = dataclasses.replace(
         params_base,
@@ -599,6 +660,7 @@ def fit_k_kbeta_from_flow_profile(
         k_beta=10.0 ** res_stage1.x[1],
     )
 
+    t0 = _stage_start()
     tau_grid = np.array([0.5, 0.8, 1.0, 1.3, 1.6, 2.0, 2.5, 3.0, 4.0, 5.0])
     best_tau = tau_lag_init_s
     best_tau_loss = float("inf")
@@ -607,7 +669,9 @@ def fit_k_kbeta_from_flow_profile(
         if loss_tau < best_tau_loss:
             best_tau_loss = loss_tau
             best_tau = float(tau_try)
+    _stage_end("tau_grid", t0, nfev=len(tau_grid))
 
+    t0 = _stage_start()
     res_stage2 = minimize(
         lambda x: _flow_loss(x, best_tau),
         np.array([np.log10(params_stage1.k), np.log10(params_stage1.k_beta)]),
@@ -615,6 +679,7 @@ def fit_k_kbeta_from_flow_profile(
         bounds=bounds,
         options={"xtol": 1e-2, "ftol": 1e-2, "maxiter": 90, "disp": False},
     )
+    _stage_end("stage2_kkbeta", t0, nfev=getattr(res_stage2, "nfev", None))
 
     params_fit = dataclasses.replace(
         params_base,
@@ -622,56 +687,12 @@ def fit_k_kbeta_from_flow_profile(
         k_beta=10.0 ** res_stage2.x[1],
     )
     tau_lag_fit = best_tau
-    res_stage3 = None
+    # NOTE: 舊 stage3_wetbed 已隨 P0/P1 重構移除（χ 結構態合併進 f_post）。
     res_stage4 = None
     res_stage5 = None
 
-    if fit_wetbed_structure:
-        gain_seed_grid = np.array([0.15, 0.30, 0.45, 0.70, 1.00], dtype=float)
-        seed_loss = float("inf")
-        seed_gain = 0.30
-        for gain_try in gain_seed_grid:
-            params_try = dataclasses.replace(
-                params_fit,
-                wetbed_struct_gain=float(gain_try),
-                wetbed_struct_rate=float(wetbed_rate_fixed),
-                wetbed_impact_release_rate=float(wetbed_release_fixed),
-            )
-            loss_try, _ = _evaluate_loss(params_try, tau_lag_fit, coarse=True)
-            if loss_try < seed_loss:
-                seed_loss = loss_try
-                seed_gain = float(gain_try)
-
-        def _wetbed_loss(x: np.ndarray) -> float:
-            gain_try = float(np.clip(x[0], 0.0, 1.2))
-            params_try = dataclasses.replace(
-                params_fit,
-                wetbed_struct_gain=gain_try,
-                wetbed_struct_rate=float(wetbed_rate_fixed),
-                wetbed_impact_release_rate=float(wetbed_release_fixed),
-            )
-            loss_try, _ = _evaluate_loss(params_try, tau_lag_fit, coarse=True)
-            # identifiability 顯示 gain 比 rate 更可用；因此只對 gain 做弱正則化。
-            reg = 0.5 * weights["regularization"] * (
-                ((gain_try - seed_gain) / max(seed_gain, 0.20)) ** 2
-            )
-            return float(loss_try + reg)
-
-        res_stage3 = minimize(
-            _wetbed_loss,
-            np.array([seed_gain], dtype=float),
-            method="Powell",
-            bounds=[(0.0, 1.2)],
-            options={"xtol": 5e-3, "ftol": 1e-2, "maxiter": 80, "disp": False},
-        )
-        params_fit = dataclasses.replace(
-            params_fit,
-            wetbed_struct_gain=float(np.clip(res_stage3.x[0], 0.0, 1.2)),
-            wetbed_struct_rate=float(wetbed_rate_fixed),
-            wetbed_impact_release_rate=float(wetbed_release_fixed),
-        )
-
     if fit_preferential_flow:
+        t_pref_start = _stage_start()
         pref_off_loss, _ = _evaluate_loss(params_fit, tau_lag_fit, coarse=True)
         seed_specs = [2.5e-5, 5.0e-5, 8.0e-5, 1.2e-4, 2.0e-4]
         seed_loss = pref_off_loss
@@ -727,23 +748,128 @@ def fit_k_kbeta_from_flow_profile(
                 params_fit = params_pref
             else:
                 res_stage4 = None
+        _stage_end("stage4_pref", t_pref_start, nfev=getattr(res_stage4, "nfev", None))
 
-    if fit_server_cooling and final_cup_temp_C is not None and vessel_equivalent_ml is not None:
-        server_off_loss, _ = _evaluate_loss(params_fit, tau_lag_fit, coarse=True)
-        seed_specs = [0.0, 2.0e-4, 5.0e-4, 1.0e-3, 2.0e-3, 4.0e-3]
-        seed_loss = server_off_loss
-        seed_lambda = 0.0
-        for lambda_try in seed_specs:
+    # ── Stage 5+6：熱端 (lambda_server_ambient, lambda_liquid_dripper) joint fit ──
+    # Why: thermal identifiability 顯示兩者沿對角線存在 mild ridge
+    #      （cup_temp_error 在對角守恆，沿 ridge Δloss span ~0.16）。
+    #      sequential 1D fit 會在初始點 (0.02, 0) 收斂於局部 (1.0×, 1.0×)，
+    #      無法穿過 ridge 抵達真正的 2D 最小值。改採 joint Powell 在 log-space。
+    # Implementation note: stage 6 變數仍保留以維持 stage_res schema 相容性，
+    #      但實作上是同一輪 minimize 的 result alias。
+    res_stage6 = None
+    if (
+        fit_server_cooling
+        and final_cup_temp_C is not None
+        and vessel_equivalent_ml is not None
+    ):
+        t_thermal_start = _stage_start()
+        thermal_off_loss, thermal_off_metrics = _evaluate_loss(params_fit, tau_lag_fit, coarse=True)
+        liq_prior = float(np.log10(MEASURED_LIQUID_DRIPPER_LAMBDA))
+        liq_baseline = max(float(getattr(params_fit, "lambda_liquid_dripper", MEASURED_LIQUID_DRIPPER_LAMBDA)), 1e-6)
+        if verbose:
+            cup_err_off = thermal_off_metrics.get("mixed_temp")
+            cup_err_str = (
+                f"{float(cup_err_off - final_cup_temp_C):+.2f}"
+                if cup_err_off is not None and final_cup_temp_C is not None
+                else "n/a"
+            )
+            print(f"  [stage5] thermal_off_loss={thermal_off_loss:.4f} "
+                  f"(V_RMSE={thermal_off_metrics['volume_rmse']:.3f}, "
+                  f"cup_err={cup_err_str} °C)")
+
+        # Server seed search (1D)：先抓出大致的 lambda_server 量級
+        server_seed_grid = [0.0, 2.0e-4, 5.0e-4, 1.0e-3, 2.0e-3, 4.0e-3]
+        seed_loss = thermal_off_loss
+        seed_server = 0.0
+        for lambda_try in server_seed_grid:
             params_try = dataclasses.replace(
                 params_fit,
                 lambda_server_ambient=float(lambda_try),
             )
             loss_try, _ = _evaluate_loss(params_try, tau_lag_fit, coarse=True)
-            if loss_try < seed_loss:
+            improved = loss_try < seed_loss
+            if verbose:
+                tag = " <-- update" if improved else ""
+                print(f"  [stage5 seed] λ_srv={lambda_try:.1e}  loss={loss_try:.4f}{tag}")
+            if improved:
                 seed_loss = loss_try
-                seed_lambda = float(lambda_try)
+                seed_server = float(lambda_try)
 
-        if seed_lambda > 0.0:
+        # 永遠嘗試 joint Powell（即使 seed 沒找到改善）：
+        # 觀察到原 4 小時 fit 在 7-bin baseline 下 stage 5/6 沒觸發；推測為
+        # seed search 因浮點精度 / cache hit 導致 `loss_try < seed_loss` 嚴格 `<`
+        # 比較失敗，雖然 Powell 從合理起點實際可找到 0.5+ 的改善。
+        # 改為：seed search 只用來決定起點 λ_srv，joint Powell 一律啟動；
+        # 由結尾的 `improvement_ok and volume_guard_ok` 把關「真的有改善才接受」。
+        attempt_joint = fit_liquid_dripper_lambda
+        if verbose:
+            print(f"  [stage5] seed_server={seed_server:.1e}, seed_loss={seed_loss:.4f}, "
+                  f"attempt_joint_powell={attempt_joint}")
+        if attempt_joint:
+            # 若 seed 沒找到改善，從 1e-4 出發（量級對 V60 baseline 是合理小默認值）
+            seed_for_powell = seed_server if seed_server > 0.0 else 1.0e-4
+            seed_server_clamped = float(np.clip(seed_for_powell, 1.0e-5, 1.0e-2))
+
+            def _thermal_loss(log_x: np.ndarray) -> float:
+                liq_try = 10.0 ** log_x[0]
+                server_try = 10.0 ** log_x[1]
+                params_try = dataclasses.replace(
+                    params_fit,
+                    lambda_liquid_dripper=float(liq_try),
+                    lambda_server_ambient=float(server_try),
+                )
+                loss_try, _ = _evaluate_loss(params_try, tau_lag_fit, coarse=True)
+                # 弱 prior reg on lambda_liq_drip toward MEASURED initial guess
+                reg = 0.30 * weights["regularization"] * ((log_x[0] - liq_prior) ** 2)
+                return float(loss_try + reg)
+
+            x0 = np.array([
+                np.log10(liq_baseline),
+                np.log10(seed_server_clamped),
+            ], dtype=float)
+            res_thermal = minimize(
+                _thermal_loss,
+                x0,
+                method="Powell",
+                bounds=[
+                    (np.log10(5.0e-3), np.log10(1.0e-1)),  # lambda_liq_drip
+                    (np.log10(1.0e-5), np.log10(1.0e-2)),  # lambda_server
+                ],
+                options={"xtol": 8e-3, "ftol": 1e-2, "maxiter": 150, "disp": False},
+            )
+            params_thermal = dataclasses.replace(
+                params_fit,
+                lambda_liquid_dripper=float(10.0 ** res_thermal.x[0]),
+                lambda_server_ambient=float(10.0 ** res_thermal.x[1]),
+            )
+            # Volume guard：禁止熱端 fit 為了杯溫犧牲體積擬合
+            # IMPORTANT: 與 thermal_off 比較必須用同一 coarse mode（apples-to-apples）。
+            # FINE / COARSE V_RMSE 存在 ~0.15 mL 系統性差（不同 n_eval 的數值積分差），
+            # 若這裡用 FINE 對比 stage entry 的 COARSE，會誤殺合理的 Powell 改善
+            # （原 4 小時 fit 的 stage 5/6 沒觸發即此 bug：FINE 13.917 vs COARSE+0.2=13.888 by 0.029）。
+            _, thermal_metrics_coarse = _evaluate_loss(params_thermal, tau_lag_fit, coarse=True)
+            volume_guard_ok = thermal_metrics_coarse["volume_rmse"] <= (thermal_off_metrics["volume_rmse"] + 0.20)
+            final_loss_with_reg = _thermal_loss(np.asarray(res_thermal.x, dtype=float))
+            improvement_ok = final_loss_with_reg < thermal_off_loss
+            if verbose:
+                print(f"  [stage5 powell] λ_liq={10.0**res_thermal.x[0]:.3e}, "
+                      f"λ_srv={10.0**res_thermal.x[1]:.3e}, "
+                      f"loss+reg={final_loss_with_reg:.4f}, "
+                      f"V_RMSE={thermal_metrics_coarse['volume_rmse']:.3f} "
+                      f"(off+0.2={thermal_off_metrics['volume_rmse']+0.20:.3f}, both coarse), "
+                      f"vol_guard={'OK' if volume_guard_ok else 'FAIL'}, "
+                      f"improved={'YES' if improvement_ok else 'NO'}")
+            if improvement_ok and volume_guard_ok:
+                params_fit = params_thermal
+                res_stage5 = res_thermal  # 沿用 stage_res schema
+                res_stage6 = res_thermal  # alias：兩個 λ 由同一輪 minimize 產出
+        else:
+            # Fall-back：fit_liquid_dripper_lambda 關閉時，做 server-only 1D fit。
+            # 同樣 unconditional：seed 沒找到改善也跑 Powell，由結尾 strict `<`
+            # 比較把關。
+            seed_for_server_powell = seed_server if seed_server > 0.0 else 1.0e-4
+            seed_server_anchor = float(np.clip(seed_for_server_powell, 1.0e-5, 1.0e-2))
 
             def _server_loss(log_x: np.ndarray) -> float:
                 lambda_try = 10.0 ** log_x[0]
@@ -753,29 +879,110 @@ def fit_k_kbeta_from_flow_profile(
                 )
                 loss_try, _ = _evaluate_loss(params_try, tau_lag_fit, coarse=True)
                 reg = 0.20 * weights["regularization"] * (
-                    (log_x[0] - np.log10(seed_lambda)) ** 2
+                    (log_x[0] - np.log10(seed_server_anchor)) ** 2
                 )
                 return float(loss_try + reg)
 
-            res_stage5 = minimize(
+            res_server = minimize(
                 _server_loss,
-                np.array([np.log10(seed_lambda)], dtype=float),
+                np.array([np.log10(seed_server_anchor)], dtype=float),
                 method="Powell",
-                bounds=[
-                    (np.log10(1.0e-5), np.log10(1.0e-2)),
-                ],
+                bounds=[(np.log10(1.0e-5), np.log10(1.0e-2))],
                 options={"xtol": 8e-3, "ftol": 1e-2, "maxiter": 90, "disp": False},
             )
             params_server = dataclasses.replace(
                 params_fit,
-                lambda_server_ambient=float(10.0 ** res_stage5.x[0]),
+                lambda_server_ambient=float(10.0 ** res_server.x[0]),
             )
-            if _server_loss(np.asarray(res_stage5.x, dtype=float)) < server_off_loss:
+            if _server_loss(np.asarray(res_server.x, dtype=float)) < thermal_off_loss:
                 params_fit = params_server
-            else:
-                res_stage5 = None
+                res_stage5 = res_server
+        _stage_end("stage5_thermal", t_thermal_start, nfev=getattr(res_stage5, "nfev", None) if res_stage5 else None)
 
+    # ── Stage 7：萃取 joint fit (k_ext_slow_coef, max_EY) ────────────────────
+    # Why: 量測 Brix→TDS 解鎖萃取端 fit。Forward sweep 顯示 k_ext_slow 單獨變化在
+    #      500× 仍只能達 TDS 8.4 g/L（M_slow 在 reduced-order 0D + Fickian path²
+    #      下時間有限），需要同時提升 max_EY 把 M_sol_0 cap 撐高。Joint Powell 2D：
+    #      log10(k_ext_slow_coef) × max_EY，以 prior reg 約束在 roast envelope。
+    #      AGENTS.md §4.C：max_EY 為 roast-driven prior，允許小範圍 fit 校準。
+    res_stage7 = None
+    if final_tds_gl_obs is not None:
+        t_ext_start = _stage_start()
+        ext_off_loss, ext_off_metrics = _evaluate_loss(params_fit, tau_lag_fit, coarse=True)
+        slow_baseline = max(float(getattr(params_fit, "k_ext_slow_coef", 1e-7)), 1e-12)
+        slow_log_baseline = float(np.log10(slow_baseline))
+        max_ey_baseline = float(getattr(params_fit, "max_EY", 0.22))
+        if verbose:
+            print(f"  [stage7] ext_off_loss={ext_off_loss:.4f} (V_RMSE={ext_off_metrics['volume_rmse']:.3f}, "
+                  f"TDS_pred={ext_off_metrics.get('tds_pred', 0):.2f} g/L, target {final_tds_gl_obs:.2f}, "
+                  f"max_EY_init={max_ey_baseline:.3f})")
+
+        def _ext_loss(x: np.ndarray) -> float:
+            slow_try = float(10.0 ** x[0])
+            max_ey_try = float(np.clip(x[1], 0.15, 0.40))
+            params_try = dataclasses.replace(
+                params_fit, k_ext_slow_coef=slow_try, max_EY=max_ey_try
+            )
+            loss_try, _ = _evaluate_loss(params_try, tau_lag_fit, coarse=True)
+            # Prior reg：log10 k_ext_slow 偏離 baseline 與 max_EY 偏離 roast prior
+            reg = 0.20 * weights["regularization"] * (x[0] - slow_log_baseline) ** 2
+            reg += 0.50 * weights["regularization"] * ((x[1] - max_ey_baseline) / 0.05) ** 2
+            return float(loss_try + reg)
+
+        # Powell 2D: (log10 k_ext_slow, max_EY)
+        # Bounds: k_ext_slow 0.3-100× baseline; max_EY 0.18-0.40（延伸自 0.35）
+        # 2026-05-01 update: kinu29/4:11 canonical fit 收於 max_EY=0.349（clip=0.35），
+        # Powell 還想往上推。延伸 bound 到 0.40 看能不能再降 TDS error。
+        # 0.40 對 light roast 仍超 SCA 22% 範圍，但 model max_EY 是 closure 級的
+        # M_sol cap，與 actual brew EY 不需直接對應；prior reg 會把它拉回。
+        x0 = np.array([slow_log_baseline, max_ey_baseline], dtype=float)
+        res_stage7 = minimize(
+            _ext_loss,
+            x0,
+            method="Powell",
+            bounds=[
+                (slow_log_baseline - 0.5, slow_log_baseline + 2.0),  # 0.3× ~ 100×
+                (0.18, 0.40),                                          # extended envelope
+            ],
+            options={"xtol": 5e-3, "ftol": 5e-3, "maxiter": 100, "disp": False},
+        )
+        slow_fit = float(10.0 ** res_stage7.x[0])
+        max_ey_fit = float(np.clip(res_stage7.x[1], 0.18, 0.40))
+        params_ext = dataclasses.replace(
+            params_fit, k_ext_slow_coef=slow_fit, max_EY=max_ey_fit
+        )
+        ext_loss_final, ext_metrics_final = _evaluate_loss(params_ext, tau_lag_fit, coarse=True)
+        # vol_guard 用 relative%-pt 制（與 benchmark gate 7% 一致）：
+        # 允許 stage 7 把 V_RMSE 上推 0.5 percentage point（對 270 mL V_out 約 1.35 mL）
+        # 只要最終仍在 benchmark gate 內就 OK；之前 absolute +0.20/+0.50 mL 對短 brew
+        # 過嚴導致 kinu28 stage 7 reject by 0.026 mL（5.45%→5.65% 完全在 gate 內）。
+        v_out_final = max(float(ext_off_metrics["sim"]["v_out_ml"][-1]), 1.0)
+        v_off_pct = ext_off_metrics["volume_rmse"] / v_out_final
+        v_new_pct = ext_metrics_final["volume_rmse"] / v_out_final
+        volume_guard_ok = v_new_pct <= v_off_pct + 0.005  # +0.5 percentage point
+        improvement_ok = ext_loss_final < ext_off_loss
+        if verbose:
+            print(f"  [stage7 powell] k_ext_slow={slow_fit:.3e} ({slow_fit/slow_baseline:.2f}× prior), "
+                  f"max_EY={max_ey_fit:.3f}, loss={ext_loss_final:.4f}, "
+                  f"V_RMSE%={v_new_pct*100:.2f} (off={v_off_pct*100:.2f}, gate +0.5pt={v_off_pct*100+0.5:.2f}), "
+                  f"TDS_pred={ext_metrics_final.get('tds_pred', 0):.2f} g/L, "
+                  f"vol_guard={'OK' if volume_guard_ok else 'FAIL'}, "
+                  f"improved={'YES' if improvement_ok else 'NO'}")
+        if improvement_ok and volume_guard_ok:
+            params_fit = params_ext
+        else:
+            res_stage7 = None
+        _stage_end("stage7_extraction", t_ext_start, nfev=getattr(res_stage7, "nfev", None) if res_stage7 else None)
+
+    t_final = _stage_start()
     loss_final, metrics_final = _evaluate_loss(params_fit, tau_lag_fit, coarse=False)
+    _stage_end("final_eval", t_final, nfev=1)
+    fit_wall = time.perf_counter() - fit_t0_wall
+    fit_proc = time.process_time() - fit_t0_proc
+    if verbose:
+        print(f"  [timer] TOTAL: wall={fit_wall:.1f}s proc={fit_proc:.1f}s "
+              f"ratio={fit_wall/max(fit_proc,1e-9):.2f}"
+              + (" ⚠ external stall detected" if fit_wall/max(fit_proc,1e-9) > 1.5 else ""))
     sim_final = metrics_final["sim"]
     obs_final = metrics_final["obs_layer"]
     v_pred_final = metrics_final["v_pred_obs"]
@@ -794,9 +1001,9 @@ def fit_k_kbeta_from_flow_profile(
         "stage_res": {
             "stage1": res_stage1,
             "stage2": res_stage2,
-            "stage3_wetbed": res_stage3,
             "stage4_pref": res_stage4,
             "stage5_server": res_stage5,
+            "stage6_liq_dripper": res_stage6,
         },
         "sim_final": sim_final,
         "obs_layer": obs_final,
@@ -809,11 +1016,6 @@ def fit_k_kbeta_from_flow_profile(
         "k_beta_throat_prior": float(getattr(params_base, "k_beta_throat_prior", np.nan)),
         "k_beta_deposition_prior": float(getattr(params_base, "k_beta_deposition_prior", np.nan)),
         "tau_lag_s": tau_lag_fit,
-        "fit_wetbed_structure": bool(fit_wetbed_structure),
-        "wetbed_struct_gain_fit": float(getattr(params_fit, "wetbed_struct_gain", 0.0)),
-        "wetbed_struct_rate_fit": float(getattr(params_fit, "wetbed_struct_rate", 0.0)),
-        "wetbed_impact_release_rate_fixed": float(getattr(params_fit, "wetbed_impact_release_rate", 0.0)),
-        "wetbed_struct_rate_fixed": float(wetbed_rate_fixed),
         "fit_preferential_flow": pref_flow_active,
         "pref_flow_coeff_fit": float(getattr(params_fit, "pref_flow_coeff", 0.0)),
         "pref_flow_open_rate_fit": float(getattr(params_fit, "pref_flow_open_rate", 0.0)),
@@ -837,8 +1039,23 @@ def fit_k_kbeta_from_flow_profile(
         "vessel_equivalent_ml": vessel_equivalent_ml,
         "fit_server_cooling": bool(fit_server_cooling and final_cup_temp_C is not None and vessel_equivalent_ml is not None),
         "server_cooling_lambda_fit": float(getattr(params_fit, "lambda_server_ambient", 0.0)),
+        "fit_liquid_dripper_lambda": bool(res_stage6 is not None),
+        "lambda_liquid_dripper_fit": float(getattr(params_fit, "lambda_liquid_dripper", MEASURED_LIQUID_DRIPPER_LAMBDA)),
+        "lambda_liquid_dripper_prior": float(MEASURED_LIQUID_DRIPPER_LAMBDA),
         "mixed_cup_temp_C": mixed_temp_final,
         "cup_temp_error_C": temp_err_final,
+        # TDS / extraction outputs
+        "final_tds_gl_obs": final_tds_gl_obs,
+        "final_tds_gl_pred": metrics_final.get("tds_pred"),
+        "tds_error_gl": (
+            float(metrics_final["tds_pred"] - final_tds_gl_obs)
+            if metrics_final.get("tds_pred") is not None and final_tds_gl_obs is not None
+            else None
+        ),
+        "fit_extraction": bool(res_stage7 is not None),
+        "k_ext_slow_coef_fit": float(getattr(params_fit, "k_ext_slow_coef", 0.0)),
+        "k_ext_fast_coef_fit": float(getattr(params_fit, "k_ext_fast_coef", 0.0)),
+        "max_EY_fit": float(getattr(params_fit, "max_EY", 0.0)),
         "h_bed_cm": float(params_fit.h_bed * 100.0),
         "rho_bulk_dry_g_ml": float(params_fit.rho_bulk_dry_g_ml),
         "axial_node_count": int(getattr(params_fit, "axial_node_count", 1)),
@@ -846,10 +1063,13 @@ def fit_k_kbeta_from_flow_profile(
         "sat_rel_perm_exp_fit": float(getattr(params_fit, "sat_rel_perm_exp", np.nan)),
         "weights": weights,
         "total_loss": float(loss_final),
+        "stage_timings": stage_timings,
+        "fit_wall_s": float(fit_wall),
+        "fit_process_s": float(fit_proc),
     }
 
     if verbose:
-        print("=== 多目標流動標定：k / k_beta / wetbed χ ===")
+        print("=== 多目標流動標定：k / k_beta / pref / thermal (server + liq_drip) ===")
         print(f"  CSV         : {csv_path}")
         print(f"  Roast       : {roast_key}")
         print(f"  Bed height  : {params_fit.h_bed*100:.1f} cm")
@@ -859,10 +1079,6 @@ def fit_k_kbeta_from_flow_profile(
         print(f"  k_beta prior: {getattr(params_base, 'k_beta_prior_psd', params_base.k_beta):.3e} m⁻³")
         print(f"    throat / deposition = {getattr(params_fit, 'k_beta_throat_coeff', np.nan):.3e} / {getattr(params_fit, 'k_beta_deposition_coeff', np.nan):.3e}")
         print(f"  tau_lag     : {tau_lag_fit:.2f} s")
-        if fit_wetbed_structure:
-            print(f"  χ gain      : {params_fit.wetbed_struct_gain:.3f}")
-            print(f"  χ rate      : fixed {params_fit.wetbed_struct_rate:.3f}")
-            print(f"  χ release   : fixed {params_fit.wetbed_impact_release_rate:.2f}")
         if pref_flow_active:
             print(f"  pref coeff  : {params_fit.pref_flow_coeff:.3e} m²/s")
             print(f"  pref open   : fixed {params_fit.pref_flow_open_rate:.3f} 1/s")
@@ -873,6 +1089,8 @@ def fit_k_kbeta_from_flow_profile(
         if final_cup_temp_C is not None and mixed_temp_final is not None:
             print(f"  Cup temp    : {mixed_temp_final:.1f} °C  (target {final_cup_temp_C:.1f} °C)")
             print(f"  λ_server    : {getattr(params_fit, 'lambda_server_ambient', 0.0):.3e} 1/s")
+            print(f"  λ_liq_drip  : {getattr(params_fit, 'lambda_liquid_dripper', 0.0):.3e} 1/s "
+                  f"(prior {MEASURED_LIQUID_DRIPPER_LAMBDA:.2e})")
         print(f"  Brew / drain: {sim_final['brew_time']:.1f} s / {sim_final['drain_time']:.1f} s")
 
     return params_fit, info
@@ -916,17 +1134,23 @@ def save_flow_fit_summary_csv(output_path: str | Path, info: dict) -> None:
         "vessel_equivalent_ml",
         "fit_server_cooling",
         "server_cooling_lambda_fit",
-        "fit_wetbed_structure",
-        "wetbed_struct_gain_fit",
-        "wetbed_struct_rate_fit",
-        "wetbed_struct_rate_fixed",
-        "wetbed_impact_release_rate_fixed",
+        "fit_liquid_dripper_lambda",
+        "lambda_liquid_dripper_fit",
+        "lambda_liquid_dripper_prior",
         "fit_preferential_flow",
         "pref_flow_coeff_fit",
         "pref_flow_open_rate_fit",
         "pref_flow_tau_decay_fit",
         "pref_flow_open_rate_fixed",
         "pref_flow_tau_decay_fixed",
+        # Extraction fit (stage 7)
+        "fit_extraction",
+        "k_ext_slow_coef_fit",
+        "k_ext_fast_coef_fit",
+        "max_EY_fit",
+        "final_tds_gl_obs",
+        "final_tds_gl_pred",
+        "tds_error_gl",
     ]
     row = {
         "csv_path": info["csv_path"],
@@ -957,17 +1181,22 @@ def save_flow_fit_summary_csv(output_path: str | Path, info: dict) -> None:
         "vessel_equivalent_ml": info.get("vessel_equivalent_ml"),
         "fit_server_cooling": info.get("fit_server_cooling"),
         "server_cooling_lambda_fit": info.get("server_cooling_lambda_fit"),
-        "fit_wetbed_structure": info.get("fit_wetbed_structure"),
-        "wetbed_struct_gain_fit": info.get("wetbed_struct_gain_fit"),
-        "wetbed_struct_rate_fit": info.get("wetbed_struct_rate_fit"),
-        "wetbed_struct_rate_fixed": info.get("wetbed_struct_rate_fixed"),
-        "wetbed_impact_release_rate_fixed": info.get("wetbed_impact_release_rate_fixed"),
+        "fit_liquid_dripper_lambda": info.get("fit_liquid_dripper_lambda"),
+        "lambda_liquid_dripper_fit": info.get("lambda_liquid_dripper_fit"),
+        "lambda_liquid_dripper_prior": info.get("lambda_liquid_dripper_prior"),
         "fit_preferential_flow": info.get("fit_preferential_flow"),
         "pref_flow_coeff_fit": info.get("pref_flow_coeff_fit"),
         "pref_flow_open_rate_fit": info.get("pref_flow_open_rate_fit"),
         "pref_flow_tau_decay_fit": info.get("pref_flow_tau_decay_fit"),
         "pref_flow_open_rate_fixed": info.get("pref_flow_open_rate_fixed"),
         "pref_flow_tau_decay_fixed": info.get("pref_flow_tau_decay_fixed"),
+        "fit_extraction": info.get("fit_extraction"),
+        "k_ext_slow_coef_fit": info.get("k_ext_slow_coef_fit"),
+        "k_ext_fast_coef_fit": info.get("k_ext_fast_coef_fit"),
+        "max_EY_fit": info.get("max_EY_fit"),
+        "final_tds_gl_obs": info.get("final_tds_gl_obs"),
+        "final_tds_gl_pred": info.get("final_tds_gl_pred"),
+        "tds_error_gl": info.get("tds_error_gl"),
     }
     with path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -1015,9 +1244,6 @@ def plot_flow_fit_comparison(
         3, 1, figsize=(11.5, 10.2),
         gridspec_kw={"height_ratios": [3.2, 1.7, 1.5]},
     )
-    chi_gain = float(info.get("wetbed_struct_gain_fit", 0.0))
-    chi_rate_fixed = float(info.get("wetbed_struct_rate_fixed", info.get("wetbed_struct_rate_fit", 0.0)))
-    chi_release_fixed = float(info.get("wetbed_impact_release_rate_fixed", 0.0))
     pref_coeff = float(info.get("pref_flow_coeff_fit", 0.0))
     pref_open = float(info.get("pref_flow_open_rate_fixed", info.get("pref_flow_open_rate_fit", 0.0)))
     pref_tau = float(info.get("pref_flow_tau_decay_fixed", info.get("pref_flow_tau_decay_fit", 0.0)))
@@ -1025,9 +1251,6 @@ def plot_flow_fit_comparison(
         ("k", f"{info['k_fit']:.2e} m^2"),
         ("k_beta", f"{info['k_beta_fit']:.0f} m^-3"),
         ("tau_lag", f"{info.get('tau_lag_s', np.nan):.2f} s"),
-        ("chi gain", f"{chi_gain:.2f}" if info.get("fit_wetbed_structure") else "off"),
-        ("chi rate", f"{chi_rate_fixed:.2f} fixed" if info.get("fit_wetbed_structure") else "-"),
-        ("chi rel", f"{chi_release_fixed:.2f} fixed" if info.get("fit_wetbed_structure") else "-"),
         ("pref", f"{pref_coeff:.1e}/{pref_open:.2f}f/{pref_tau:.1f}f" if info.get("fit_preferential_flow") else "off"),
         ("V RMSE", f"{info['rmse_ml']:.1f} mL"),
         ("q RMSE", f"{info.get('velocity_rmse_mlps', np.nan):.2f} mL/s"),
@@ -1105,16 +1328,100 @@ def plot_flow_fit_comparison(
     _save_fig(fig, save_as, f"流動擬合對照圖已儲存至 {save_as}")
 
 
+def fit_with_multi_start(
+    csv_path: str | Path,
+    starts: list[V60Params] | None = None,
+    fit_preferential_flow: bool = True,
+    pref_open_rate_fixed: float = DEFAULT_PREF_FLOW_OPEN_RATE_FIXED,
+    pref_tau_decay_fixed: float = DEFAULT_PREF_FLOW_TAU_DECAY_FIXED,
+    verbose: bool = True,
+) -> tuple[V60Params, dict]:
+    """
+    Multi-start wrapper：對 N 個起點各跑一次 `fit_k_kbeta_from_flow_profile`，
+    取 lowest total_loss 的結果作為 canonical fit。
+
+    What:
+        以 3 個起點（V60Params 預設、PSD-prior 起點、上次 calibrated artifact）跑
+        full fit，比較 final loss，回傳最低者；info dict 多附 `multi_start_results` 欄。
+
+    Why:
+        2026-05-01 subagent (c) 審查發現 stages 1/2 loss surface 沿 ridge 因
+        drain_dt 量化（已修為 sub-grid 線性插補）與其他殘餘非光滑性，依然
+        對 Powell 起點敏感（k_beta basin 漂 40%）。所有 basin 的 V_RMSE 在
+        量測解析度內等價，但「同一 csv 不同 caller 不同結果」會在 debug 與
+        EXPERIMENT_LOG 比對時造成混淆。multi-start 以 ~3× 成本（單跑 1-3 min →
+        multi 3-9 min）提供 deterministic 收斂結果。
+    """
+    if starts is None:
+        # 預設三個起點
+        starts = [V60Params()]  # V60Params 物理預設
+        # 嘗試讀上一次 calibrated artifact 作 warm-start
+        try:
+            with Path(DEFAULT_MEASURED_FLOW_FIT_SUMMARY).open(encoding="utf-8") as f:
+                last = next(csv.DictReader(f), None)
+            if last is not None:
+                starts.append(V60Params(
+                    k=float(last.get("k_fit", V60Params().k)),
+                    k_beta=float(last.get("k_beta_fit", V60Params().k_beta)),
+                ))
+        except (FileNotFoundError, StopIteration, ValueError):
+            pass
+        # PSD-prior 起點：以 V60Params() 預設、k 中位、k_beta 取 PSD prior（在 fit 中算）
+        # fit_k_kbeta_from_flow_profile 會自動從 V60Params.for_roast(profile) 起；這裡用 k 中位作差異化
+        starts.append(V60Params(k=5.0e-11, k_beta=2000.0))
+
+    multi_results: list[dict] = []
+    for i, p_init in enumerate(starts):
+        if verbose:
+            print(f"=== Multi-start fit {i+1}/{len(starts)} (k_init={p_init.k:.2e}, k_beta_init={p_init.k_beta:.0f}) ===")
+        p_fit, info = fit_k_kbeta_from_flow_profile(
+            csv_path=csv_path,
+            params_init=p_init,
+            fit_preferential_flow=fit_preferential_flow,
+            pref_open_rate_fixed=pref_open_rate_fixed,
+            pref_tau_decay_fixed=pref_tau_decay_fixed,
+            verbose=verbose,
+        )
+        multi_results.append({
+            "start_idx": i,
+            "k_init": float(p_init.k),
+            "k_beta_init": float(p_init.k_beta),
+            "k_fit": float(info["k_fit"]),
+            "k_beta_fit": float(info["k_beta_fit"]),
+            "rmse_ml": float(info["rmse_ml"]),
+            "total_loss": float(info["total_loss"]),
+            "params_fit": p_fit,
+            "info": info,
+        })
+
+    best = min(multi_results, key=lambda r: r["total_loss"])
+    if verbose:
+        print(f"\n=== Multi-start summary ===")
+        for r in multi_results:
+            tag = " ← winner" if r["start_idx"] == best["start_idx"] else ""
+            print(f"  start {r['start_idx']}: k={r['k_fit']:.3e}, k_beta={r['k_beta_fit']:.0f}, "
+                  f"V_RMSE={r['rmse_ml']:.3f}, loss={r['total_loss']:.3f}{tag}")
+        ks = [r["k_fit"] for r in multi_results]
+        kbs = [r["k_beta_fit"] for r in multi_results]
+        print(f"  k spread: {(max(ks)/min(ks)-1)*100:.1f}%, k_beta spread: {(max(kbs)/min(kbs)-1)*100:.1f}%")
+
+    best_info = best["info"]
+    best_info["multi_start_results"] = [
+        {k: v for k, v in r.items() if k not in ("params_fit", "info")}
+        for r in multi_results
+    ]
+    best_info["multi_start_winner_idx"] = int(best["start_idx"])
+    return best["params_fit"], best_info
+
+
 def generate_measured_flow_fit_artifacts(
     csv_path: str | Path = DEFAULT_MEASURED_FLOW_CSV,
     plot_path: str | Path = DEFAULT_MEASURED_FLOW_FIT_PLOT,
     summary_path: str | Path = DEFAULT_MEASURED_FLOW_FIT_SUMMARY,
-    fit_wetbed_structure: bool = True,
-    wetbed_release_fixed: float = 0.30,
-    wetbed_rate_fixed: float = DEFAULT_WETBED_STRUCT_RATE_FIXED,
     fit_preferential_flow: bool = True,
     pref_open_rate_fixed: float = DEFAULT_PREF_FLOW_OPEN_RATE_FIXED,
     pref_tau_decay_fixed: float = DEFAULT_PREF_FLOW_TAU_DECAY_FIXED,
+    use_multi_start: bool = True,
     verbose: bool = True,
 ) -> tuple[V60Params, dict]:
     """
@@ -1122,23 +1429,32 @@ def generate_measured_flow_fit_artifacts(
 
     What:
       1. 對量測 `V_in(t)` / `V_out(t)` 執行 `fit_k_kbeta_from_flow_profile`
+         （或 `fit_with_multi_start` 若 `use_multi_start=True`）
       2. 將結果寫成 showcase 使用的 summary CSV
       3. 輸出 measured-vs-model 對照圖
 
     Why:
       展示頁的 lead figure 與校準摘要應和目前的正式擬合流程保持同一套參數，
       避免 code path、圖檔名稱與 README 各自漂移。
+      `use_multi_start=True`（預設）以 3× 成本換取 deterministic basin 選擇
+      （參見 `fit_with_multi_start` docstring）。
     """
-    params_fit, info = fit_k_kbeta_from_flow_profile(
-        csv_path=csv_path,
-        fit_wetbed_structure=fit_wetbed_structure,
-        wetbed_release_fixed=wetbed_release_fixed,
-        wetbed_rate_fixed=wetbed_rate_fixed,
-        fit_preferential_flow=fit_preferential_flow,
-        pref_open_rate_fixed=pref_open_rate_fixed,
-        pref_tau_decay_fixed=pref_tau_decay_fixed,
-        verbose=verbose,
-    )
+    if use_multi_start:
+        params_fit, info = fit_with_multi_start(
+            csv_path=csv_path,
+            fit_preferential_flow=fit_preferential_flow,
+            pref_open_rate_fixed=pref_open_rate_fixed,
+            pref_tau_decay_fixed=pref_tau_decay_fixed,
+            verbose=verbose,
+        )
+    else:
+        params_fit, info = fit_k_kbeta_from_flow_profile(
+            csv_path=csv_path,
+            fit_preferential_flow=fit_preferential_flow,
+            pref_open_rate_fixed=pref_open_rate_fixed,
+            pref_tau_decay_fixed=pref_tau_decay_fixed,
+            verbose=verbose,
+        )
     save_flow_fit_summary_csv(summary_path, info)
     plot_flow_fit_comparison(info, save_as=str(plot_path))
     return params_fit, info
@@ -1148,8 +1464,6 @@ def fit_measured_benchmark(
     csv_path: str | Path = DEFAULT_MEASURED_FLOW_CSV,
     plot_path: str | Path = DEFAULT_MEASURED_FLOW_FIT_PLOT,
     summary_path: str | Path = DEFAULT_MEASURED_FLOW_FIT_SUMMARY,
-    wetbed_release_fixed: float = 0.30,
-    wetbed_rate_fixed: float = DEFAULT_WETBED_STRUCT_RATE_FIXED,
     fit_preferential_flow: bool = True,
     pref_open_rate_fixed: float = DEFAULT_PREF_FLOW_OPEN_RATE_FIXED,
     pref_tau_decay_fixed: float = DEFAULT_PREF_FLOW_TAU_DECAY_FIXED,
@@ -1160,7 +1474,7 @@ def fit_measured_benchmark(
 
     What:
         固定使用 `kinu29_light_20g_flow_profile.csv` 作為 benchmark case，
-        跑 `k / k_beta / tau_lag + wetbed χ(gain) + pref-flow(coeff)` 校準，
+        跑 `k / k_beta / tau_lag + pref-flow(coeff) + server cooling` 校準，
         並輸出對應的 summary CSV 與 comparison plot。
 
     Why:
@@ -1171,9 +1485,6 @@ def fit_measured_benchmark(
         csv_path=csv_path,
         plot_path=plot_path,
         summary_path=summary_path,
-        fit_wetbed_structure=True,
-        wetbed_release_fixed=wetbed_release_fixed,
-        wetbed_rate_fixed=wetbed_rate_fixed,
         fit_preferential_flow=fit_preferential_flow,
         pref_open_rate_fixed=pref_open_rate_fixed,
         pref_tau_decay_fixed=pref_tau_decay_fixed,

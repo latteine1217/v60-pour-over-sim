@@ -4,7 +4,7 @@ V60 手沖咖啡 ODE 模擬引擎
 此模組為核心數值積分引擎，實作 V60 動態 ODE 系統的求解與結果後處理。
 
 核心狀態向量：
-    state = [h, V_out, V_bed, V_poured, sat, extraction axial bins..., T, T_dripper, chi_struct, xi_pref]
+    state = [h, V_out, V_bed, V_poured, sat, extraction axial bins..., T, T_dripper, xi_pref]
 
 主要函式：
     simulate_brew()  — 數值積分 ODE，回傳完整時序結果 dict
@@ -34,7 +34,7 @@ def simulate_brew(
           基礎狀態固定為 [h, V_out, V_bed, V_poured, sat]；
           measured PSD bins 啟用時，接著是每個 axial layer × bin 的：
           [C_fast_ij, M_fast_ij, C_slow_ij, M_slow_ij]；
-          最後接 [T, T_dripper, chi_struct, xi_pref]。
+          最後接 [T, T_dripper, xi_pref]。
 
     Why:
           水力學仍是集總床層模型，但萃取端升級為 bin-resolved，
@@ -58,8 +58,7 @@ def simulate_brew(
     m_slow_slice = slice(5 + 3 * n_axial, 5 + 4 * n_axial)
     T_idx = 5 + 4 * n_axial
     T_dripper_idx = T_idx + 1
-    chi_idx = T_idx + 2
-    pref_idx = T_idx + 3
+    pref_idx = T_idx + 2
 
     def rhs(t, state):
         h = float(state[0])
@@ -73,13 +72,11 @@ def simulate_brew(
         M_slow_layers = np.maximum(np.asarray(state[m_slow_slice], dtype=float), 0.0).reshape(n_layers, n_bins)
         T = float(state[T_idx])
         T_dripper = float(state[T_dripper_idx])
-        chi_struct = float(state[chi_idx])
         xi_pref = float(state[pref_idx])
         h      = max(h, H_MIN)
         sat    = float(np.clip(sat, 0.0, 1.0))
         T      = float(np.clip(T, params.T_amb, params.T_brew + 5.0))
         T_dripper = float(np.clip(T_dripper, params.T_amb - 5.0, params.T_brew + 5.0))
-        chi_struct = float(np.clip(chi_struct, 0.0, 1.0))
         xi_pref = float(np.clip(xi_pref, 0.0, 1.0))
         M_fast = float(np.sum(M_fast_layers))
         M_slow = float(np.sum(M_slow_layers))
@@ -96,7 +93,6 @@ def simulate_brew(
         k_base = params.k_eff(
             V_bed, sat_flow, h,
             q_in=0.0, u_pore=0.0, t_sec=t, bloom_end_s=None,
-            wetbed_struct_state=chi_struct,
             pour_impact=impact,
         )
         psi_val = params.psi_eff(V_out)
@@ -112,7 +108,6 @@ def simulate_brew(
         k_val = params.k_eff(
             V_bed, sat_flow, h,
             q_in=Q_in, u_pore=u_proxy, t_sec=t, bloom_end_s=t_bloom_end,
-            wetbed_struct_state=chi_struct,
             pour_impact=impact,
         )
         Q_ext = params.q_extract(h, k_val, T, t, sat=sat_flow)
@@ -149,11 +144,16 @@ def simulate_brew(
         # β=1: 線性（原模型）；β>1: 超線性，末期 C_eff 更快趨零（細胞壁困住深層溶質）
         # 等效於：速率 ∝ k_ext × M^β / M₀^β × (C_sat - C)，β=1.5 時更快收斂
         β = params.beta_access
-        # 修正 [15] 流速依賴傳質係數（邊界層 Sh 效應）
-        # flow_factor = k_diff_ratio + (1-k_diff_ratio) × Q_ext/(Q_ext+Q_half)
-        # 靜置(Q→0): flow_factor→k_diff_ratio；流動(Q>>Q_half): flow_factor→1
+        # 修正 [15] 流速依賴傳質係數（邊界層 Sh 效應）—— fast 與 slow 分開
+        # 2026-05-01 subagent P2 修正：原本 fast/slow 共用一個 flow_factor。
+        #   - fast pool（外殼可及溶質）受邊界層膜傳質主導，流速確實重要 → Hill 形式
+        #   - slow pool（核心擴散釋出）受核心擴散主導，邊界層幾乎不影響
+        #     物理上 slow 在靜置時也應該緩慢進行，不該被壓到 k_diff_ratio=0.1
+        # flow_factor_fast = k_diff_ratio + (1-k_diff_ratio) × Q_bed/(Q_bed+Q_half)
+        # flow_factor_slow = 1.0  （constant，slow 不受 Q_bed 主導）
         _kr = params.k_diff_ratio
-        flow_factor = _kr + (1.0 - _kr) * Q_bed / (Q_bed + params.Q_half)
+        flow_factor_fast = _kr + (1.0 - _kr) * Q_bed / (Q_bed + params.Q_half)
+        flow_factor_slow = 1.0
         k_ext_fast_bins = params.k_ext_fast_bins_T(T, t_sec=t)
         k_ext_slow_bins = params.k_ext_slow_bins_T(T, t_sec=t)
         V_liq_conc_layers = np.maximum(
@@ -170,7 +170,7 @@ def simulate_brew(
             C_eff_fast_layers = params.C_sat_fast_T(T) * acc_fast_layers
         else:
             C_eff_fast_layers = np.zeros_like(C_fast_layers)
-        dis_fast_layers = k_ext_fast_bins[None, :] * flow_factor * np.maximum(C_eff_fast_layers - C_fast_layers, 0.0)
+        dis_fast_layers = k_ext_fast_bins[None, :] * flow_factor_fast * np.maximum(C_eff_fast_layers - C_fast_layers, 0.0)
 
         if params.M_slow_0 > 0:
             acc_slow_layers = np.where(
@@ -181,7 +181,7 @@ def simulate_brew(
             C_eff_slow_layers = params.C_sat_slow_T(T) * acc_slow_layers
         else:
             C_eff_slow_layers = np.zeros_like(C_slow_layers)
-        dis_slow_layers = k_ext_slow_bins[None, :] * flow_factor * np.maximum(C_eff_slow_layers - C_slow_layers, 0.0)
+        dis_slow_layers = k_ext_slow_bins[None, :] * flow_factor_slow * np.maximum(C_eff_slow_layers - C_slow_layers, 0.0)
 
         # 粉床孔隙串接 CSTR 濃度更新：上層先吃稀釋，下層決定出液濃度。
         # 上游邊界濃度視為 0（注入液進入粉床前不含咖啡溶質），
@@ -221,6 +221,16 @@ def simulate_brew(
              - params.lambda_cool * (T - params.T_amb) \
              - exchange_liq_dripper
 
+        # Energy-conservative bi-directional 熱交換（液體節點 ⇄ 濾杯節點）：
+        # 液體側：流入熱量 dE = − ρCp · V_eff_T · λ_liq_drip · (T − T_dripper) · dt
+        #   簡化為 dT/dt 形式（除以 ρCp · V_eff_T）：dT ⊃ −λ_liq_drip · (T − T_dripper)
+        # 濾杯側：等量熱量 +dE 進入，但要除以濾杯熱容 (V_equiv_dripper × ρCp)：
+        #   dT_dripper ⊃ λ_liq_drip · (V_eff_T / V_equiv_dripper) · (T − T_dripper)
+        # 此處 V_eff_T/V_equiv_dripper 縮放 NOT 表示熱交換係數隨液量變動，而是「同樣絕對熱量、
+        # 不同熱容」的單位轉換。bloom 期 V_eff_T 小（≈ V_equiv_coffee=8.6 mL）→ 縮放小
+        # ≈ 0.33，dripper 升溫慢；post-bloom V_eff_T ≈ 24 mL → 縮放 ≈ 0.92。
+        # 整體 (液體 dT_drop) × ρCp · V_eff_T == (dripper dT_rise) × ρCp · V_equiv_dripper
+        # 能量守恆。λ_liq_drip 的物理意義是「液體側 1/τ_exchange」(Newton-cooling 風格係數)。
         if params.V_equiv_dripper > 0.0:
             dT_dripper = (
                 params.lambda_liquid_dripper
@@ -231,14 +241,6 @@ def simulate_brew(
         else:
             dT_dripper = 0.0
 
-        dchi_struct = params.d_wetbed_struct_dt(
-            chi_struct,
-            q_in=Q_in,
-            h=h,
-            pour_impact=impact,
-            t_sec=t,
-            bloom_end_s=t_bloom_end,
-        )
         dxi_pref = params.d_preferential_flow_dt(
             xi_pref,
             q_in=Q_in,
@@ -253,7 +255,7 @@ def simulate_brew(
             dM_fast_layers.reshape(-1),
             dC_slow_layers.reshape(-1),
             dM_slow_layers.reshape(-1),
-            np.array([dT, dT_dripper, dchi_struct, dxi_pref], dtype=float),
+            np.array([dT, dT_dripper, dxi_pref], dtype=float),
         ))
 
     t_eval = np.linspace(0, t_end, n_eval)
@@ -265,7 +267,7 @@ def simulate_brew(
         M_fast_0_layers.reshape(-1),
         np.zeros(n_axial, dtype=float),
         M_slow_0_layers.reshape(-1),
-        np.array([params.T_amb, params.T_amb, 0.0, 0.0], dtype=float),
+        np.array([params.T_amb, params.T_amb, 0.0], dtype=float),
     ))
 
     sol = solve_ivp(
@@ -307,7 +309,6 @@ def simulate_brew(
     C_bed_bottom = np.sum(C_fast_layers[-1] + C_slow_layers[-1], axis=0)
     T_K      = np.clip(sol.y[T_idx], params.T_amb, params.T_brew + 5.0)  # [K]
     T_dripper_K = np.clip(sol.y[T_dripper_idx], params.T_amb - 5.0, params.T_brew + 5.0)
-    chi_struct = np.clip(sol.y[chi_idx], 0.0, 1.0)
     xi_pref = np.clip(sol.y[pref_idx], 0.0, 1.0)
     M_sol    = M_fast + M_slow             # 向後相容：總剩餘固相
 
@@ -329,10 +330,9 @@ def simulate_brew(
         params.k_eff(
             vb, sf, hi,
             q_in=0.0, u_pore=0.0, t_sec=float(ti), bloom_end_s=None,
-            wetbed_struct_state=chi,
             pour_impact=imp,
         )
-        for vb, sf, hi, ti, chi, imp in zip(V_bed, sat_flow_arr, h, t, chi_struct, impact_arr)
+        for vb, sf, hi, ti, imp in zip(V_bed, sat_flow_arr, h, t, impact_arr)
     ])
     q_ext_seed = np.array([
         params.q_extract(float(hi), float(kv), float(Ti), t_sec=float(ti), sat=float(sf))
@@ -348,10 +348,9 @@ def simulate_brew(
         params.k_eff(
             vb, sf, hi,
             q_in=qin, u_pore=u, t_sec=float(ti), bloom_end_s=t_bloom_end,
-            wetbed_struct_state=chi,
             pour_impact=imp,
         )
-        for vb, sf, hi, qin, u, ti, chi, imp in zip(V_bed, sat_flow_arr, h, q_in_raw, u_seed, t, chi_struct, impact_arr)
+        for vb, sf, hi, qin, u, ti, imp in zip(V_bed, sat_flow_arr, h, q_in_raw, u_seed, t, impact_arr)
     ])
     psi_vals = params.psi_eff(V_out)
     q_ext  = np.array([
@@ -490,7 +489,6 @@ def simulate_brew(
         bloom_end_s  = float(t_bloom_end),
         bloom_choke_means = choke_means,
         dominant_bloom_choke = dominant_bloom_choke,
-        wetbed_struct= chi_struct,
         pref_flow_state = xi_pref,
         extraction_bin_count = n_bins,
         axial_node_count = n_layers,

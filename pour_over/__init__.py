@@ -59,7 +59,6 @@ from .psd import (
 )
 from .analysis import (
     sensitivity_analysis,
-    scan_wetbed_structure,
     compare_grind_linkage,
     find_optimal_grind,
 )
@@ -92,7 +91,7 @@ __all__ = [
     "infer_psd_summary", "infer_psd_bins",
     "psd_overrides_for_model", "save_psd_summary_csv", "save_psd_bins_csv",
     # 分析
-    "sensitivity_analysis", "scan_wetbed_structure",
+    "sensitivity_analysis",
     "run_benchmark_suite", "analyze_fit_identifiability",
     "analyze_pref_flow_identifiability",
     "compare_grind_linkage", "find_optimal_grind",

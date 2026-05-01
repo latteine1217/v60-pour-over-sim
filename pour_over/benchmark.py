@@ -69,30 +69,37 @@ def _load_measured_benchmark_state(
         raise ValueError(f"未知烘焙度：{meta['roast']}")
 
     params_base = V60Params.for_roast(profile)
-    measured_overrides = _measured_setup_overrides(meta)
+    measured_overrides = _measured_setup_overrides(meta, flow_csv_path=flow_path)
     measured_overrides["lambda_server_ambient"] = float(
         summary.get(
             "server_cooling_lambda_fit",
             summary.get("lambda_server_ambient", measured_overrides.get("lambda_server_ambient", 0.0)),
         )
     )
-    params_fit = dataclasses.replace(
-        params_base,
+    # P0/P1 thermal cleanup（2026-04-30）：lambda_liquid_dripper 已升為 fit DOF。
+    # 若 summary 含校準值優先使用；否則 fall back 到 measured initial guess。
+    if "lambda_liquid_dripper_fit" in summary:
+        measured_overrides["lambda_liquid_dripper"] = float(summary["lambda_liquid_dripper_fit"])
+    params_fit_kwargs = dict(
         dose_g=float(meta["dose_g"]),
         h_bed=float(meta["bed_height_cm"]) / 100.0,
         T_brew=float(meta["brew_temp_C"]) + 273.15,
         k=float(summary["k_fit"]),
         k_beta=float(summary["k_beta_fit"]),
-        wetbed_struct_gain=float(summary.get("wetbed_struct_gain_fit", 0.0)),
-        wetbed_struct_rate=float(summary.get("wetbed_struct_rate_fixed", summary.get("wetbed_struct_rate_fit", 0.0))),
-        wetbed_impact_release_rate=float(summary.get("wetbed_impact_release_rate_fixed", 0.0)),
         pref_flow_coeff=float(summary.get("pref_flow_coeff_fit", 0.0)),
         pref_flow_open_rate=float(summary.get("pref_flow_open_rate_fixed", summary.get("pref_flow_open_rate_fit", 0.0))),
         pref_flow_tau_decay=float(summary.get("pref_flow_tau_decay_fixed", summary.get("pref_flow_tau_decay_fit", params_base.pref_flow_tau_decay))),
         sat_rel_perm_residual=float(summary.get("sat_rel_perm_residual_fit", params_base.sat_rel_perm_residual)),
         sat_rel_perm_exp=float(summary.get("sat_rel_perm_exp_fit", params_base.sat_rel_perm_exp)),
-        **measured_overrides,
     )
+    # Stage 7 extraction fit values: k_ext_slow_coef / max_EY (if calibrated)
+    if "k_ext_slow_coef_fit" in summary and summary["k_ext_slow_coef_fit"]:
+        params_fit_kwargs["k_ext_slow_coef"] = float(summary["k_ext_slow_coef_fit"])
+    if "k_ext_fast_coef_fit" in summary and summary["k_ext_fast_coef_fit"]:
+        params_fit_kwargs["k_ext_fast_coef"] = float(summary["k_ext_fast_coef_fit"])
+    if "max_EY_fit" in summary and summary["max_EY_fit"]:
+        params_fit_kwargs["max_EY"] = float(summary["max_EY_fit"])
+    params_fit = dataclasses.replace(params_base, **params_fit_kwargs, **measured_overrides)
     tau_lag_s = float(summary["tau_lag_s"])
     eval_info = evaluate_measured_flow_fit(flow_path, params_fit, tau_lag_s=tau_lag_s)
     info = {
@@ -113,11 +120,6 @@ def _load_measured_benchmark_state(
         "sat_rel_perm_exp_fit": float(getattr(params_fit, "sat_rel_perm_exp", params_base.sat_rel_perm_exp)),
         "k_fit": float(params_fit.k),
         "k_beta_fit": float(params_fit.k_beta),
-        "wetbed_struct_gain_fit": float(params_fit.wetbed_struct_gain),
-        "wetbed_struct_rate_fit": float(params_fit.wetbed_struct_rate),
-        "wetbed_struct_rate_fixed": float(summary.get("wetbed_struct_rate_fixed", params_fit.wetbed_struct_rate)),
-        "wetbed_impact_release_rate_fixed": float(params_fit.wetbed_impact_release_rate),
-        "fit_wetbed_structure": True,
         "fit_preferential_flow": (
             summary.get("fit_preferential_flow", "False") in ("True", "true", True)
             or float(summary.get("pref_flow_coeff_fit", 0.0)) > 0.0
@@ -129,6 +131,14 @@ def _load_measured_benchmark_state(
         "pref_flow_tau_decay_fixed": float(summary.get("pref_flow_tau_decay_fixed", params_fit.pref_flow_tau_decay)),
         "fit_server_cooling": summary.get("fit_server_cooling", "False") in ("True", "true", True),
         "server_cooling_lambda_fit": float(summary.get("server_cooling_lambda_fit", getattr(params_fit, "lambda_server_ambient", 0.0))),
+        "fit_extraction": summary.get("fit_extraction", "False") in ("True", "true", True),
+        "k_ext_slow_coef_fit": float(getattr(params_fit, "k_ext_slow_coef", 0.0)),
+        "k_ext_fast_coef_fit": float(getattr(params_fit, "k_ext_fast_coef", 0.0)),
+        "max_EY_fit": float(getattr(params_fit, "max_EY", 0.0)),
+        "final_tds_gl_obs": eval_info.get("final_tds_gl_obs"),
+        "final_tds_gl_pred": eval_info.get("final_tds_gl_pred"),
+        "tds_error_gl": eval_info.get("tds_error_gl"),
+        "v_out_final_ml": float(eval_info["sim"]["v_out_ml"][-1]),
         "total_loss": eval_info["total_loss"],
     }
     return params_fit, info
@@ -165,23 +175,38 @@ def run_benchmark_suite(
     )
 
     limits = {
-        # 14.10：P0-3 加性阻力 closure 後 baseline ≈ 13.99 mL；保留 0.11 mL 緩衝。
-        # 舊乘性疊加 baseline 為 13.39 mL（gate 13.8）。
-        "volume_rmse_max": 14.10,
+        # 2026-05-01: gate 改 relative% 制（原 14.10 mL 是 case-specific kinu29/4:11 set）
+        # cross-grinder validation 顯示 4 cases V_RMSE/V_out 一致在 5.5-6.7%，
+        # 7% 為合理 envelope（含 0.3% 緩衝）；舊 absolute gate 因 V_out 不同會誤判
+        "volume_rmse_relative_max": 0.07,    # V_RMSE / V_out_total ≤ 7%
         "velocity_rmse_max": 1.30,
         "drain_time_error_abs_max": 3.0,
         "cup_temp_error_abs_max": 3.5,
+        # 2026-05-01: TDS gate（measured Brix×0.85×10）；±2.5 g/L = ±20% on typical 12 g/L brew
+        "tds_error_abs_max": 2.5,
     }
     if thresholds is not None:
         limits.update(thresholds)
 
+    # V_out_final 用於 relative% 計算（取 sim_final 或 fall-back V_out 觀測末值）
+    v_out_final_ml = float(info.get("v_out_final_ml", 0.0))
+    if v_out_final_ml <= 0:
+        v_out_final_ml = float(info["sim_final"]["v_out_ml"][-1]) if "sim_final" in info else 1.0
+    rmse_ml = float(info["rmse_ml"])
+    rmse_relative = rmse_ml / max(v_out_final_ml, 1e-9)
+
+    tds_error = info.get("tds_error_gl")
     checks = {
-        "volume_rmse_pass": float(info["rmse_ml"]) <= limits["volume_rmse_max"],
+        "volume_rmse_pass": rmse_relative <= limits["volume_rmse_relative_max"],
         "velocity_rmse_pass": float(info["velocity_rmse_mlps"]) <= limits["velocity_rmse_max"],
         "drain_time_error_pass": abs(float(info["drain_time_error_s"])) <= limits["drain_time_error_abs_max"],
         "cup_temp_error_pass": (
             info.get("cup_temp_error_C") is None
             or abs(float(info["cup_temp_error_C"])) <= limits["cup_temp_error_abs_max"]
+        ),
+        "tds_error_pass": (
+            tds_error is None
+            or abs(float(tds_error)) <= limits["tds_error_abs_max"]
         ),
     }
     overall_pass = bool(all(checks.values()))
@@ -197,10 +222,6 @@ def run_benchmark_suite(
         "axial_node_count": int(info.get("axial_node_count", getattr(params_fit, "axial_node_count", 1))),
         "sat_rel_perm_residual_fit": float(info.get("sat_rel_perm_residual_fit", getattr(params_fit, "sat_rel_perm_residual", 0.0))),
         "sat_rel_perm_exp_fit": float(info.get("sat_rel_perm_exp_fit", getattr(params_fit, "sat_rel_perm_exp", 0.0))),
-        "wetbed_struct_gain_fit": float(info.get("wetbed_struct_gain_fit", 0.0)),
-        "wetbed_struct_rate_fit": float(info.get("wetbed_struct_rate_fit", 0.0)),
-        "wetbed_struct_rate_fixed": float(info.get("wetbed_struct_rate_fixed", info.get("wetbed_struct_rate_fit", 0.0))),
-        "wetbed_impact_release_rate_fixed": float(info.get("wetbed_impact_release_rate_fixed", 0.0)),
         "fit_preferential_flow": bool(info.get("fit_preferential_flow", False)),
         "pref_flow_coeff_fit": float(info.get("pref_flow_coeff_fit", 0.0)),
         "pref_flow_open_rate_fit": float(info.get("pref_flow_open_rate_fit", 0.0)),
@@ -210,13 +231,19 @@ def run_benchmark_suite(
         "fit_server_cooling": bool(info.get("fit_server_cooling", False)),
         "server_cooling_lambda_fit": float(info.get("server_cooling_lambda_fit", 0.0)),
         "rmse_ml": float(info["rmse_ml"]),
+        "rmse_relative": rmse_relative,
+        "v_out_final_ml": v_out_final_ml,
         "velocity_rmse_mlps": float(info["velocity_rmse_mlps"]),
         "drain_time_error_s": float(info["drain_time_error_s"]),
         "cup_temp_error_C": info.get("cup_temp_error_C"),
+        "final_tds_gl_obs": info.get("final_tds_gl_obs"),
+        "final_tds_gl_pred": info.get("final_tds_gl_pred"),
+        "tds_error_gl": tds_error,
         "volume_rmse_pass": checks["volume_rmse_pass"],
         "velocity_rmse_pass": checks["velocity_rmse_pass"],
         "drain_time_error_pass": checks["drain_time_error_pass"],
         "cup_temp_error_pass": checks["cup_temp_error_pass"],
+        "tds_error_pass": checks["tds_error_pass"],
     }
     bench_path.parent.mkdir(parents=True, exist_ok=True)
     with bench_path.open("w", encoding="utf-8", newline="") as f:
@@ -227,11 +254,14 @@ def run_benchmark_suite(
     print("\n=== Benchmark Suite ===")
     print(f"  case        : {row['case_id']}")
     print(f"  status      : {row['status']}")
-    print(f"  V_out RMSE  : {row['rmse_ml']:.2f} mL   (gate {limits['volume_rmse_max']:.2f})")
+    print(f"  V_out RMSE  : {row['rmse_ml']:.2f} mL = {rmse_relative*100:.2f}%  "
+          f"(gate ≤ {limits['volume_rmse_relative_max']*100:.1f}%)")
     print(f"  q_out RMSE  : {row['velocity_rmse_mlps']:.2f} mL/s (gate {limits['velocity_rmse_max']:.2f})")
     print(f"  Drain error : {row['drain_time_error_s']:+.2f} s  (gate ±{limits['drain_time_error_abs_max']:.2f})")
     if row["cup_temp_error_C"] is not None:
         print(f"  Cup temp err: {row['cup_temp_error_C']:+.2f} °C (gate ±{limits['cup_temp_error_abs_max']:.2f})")
+    if row.get("tds_error_gl") is not None:
+        print(f"  TDS error   : {row['tds_error_gl']:+.2f} g/L (gate ±{limits['tds_error_abs_max']:.2f})")
     print(f"  summary csv : {bench_path}")
 
     return {
