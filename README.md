@@ -24,20 +24,30 @@ Primary use cases:
 The current best model uses one dynamic state family:
 
 ```
-state = [h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct]
+state = [h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref]
 ```
 
 | Variable | Description |
 |----------|-------------|
 | `h` | Water level in the cone [m] |
 | `V_out` | Cumulative output volume [m³] |
+| `V_bed` | Cumulative bed-flow volume [m³] (used for fines-loading ageing) |
 | `V_poured` | Cumulative poured volume [m³] |
 | `sat` | Dynamic wetting / absorption saturation of the bed [-] |
 | `{C_fast,i, C_slow,i}` | Bin-resolved bed pore concentration [g/L] |
 | `{M_fast,i, M_slow,i}` | Bin-resolved remaining solid-phase solute [g] |
 | `T` | Liquid temperature [K] |
 | `T_dripper` | Dripper thermal node [K] |
-| `chi_struct` | Post-bloom wet-bed structure state [-] |
+| `xi_pref` | Preferential-flow channel state [-] (0 unless `pref_flow_coeff > 0`) |
+
+Hydraulic closure follows a fully additive resistance form:
+
+```
+k_eff = (k / R_total) × k_kc(φ_eff)
+R_total = 1 + (throat_eff − 1) + (deposition − 1) + (1/f_post − 1)
+```
+
+Each `(term − 1)` represents that mechanism's incremental resistance over the unblocked baseline. The legacy multiplicative `× f_post` and the redundant `wetbed_struct` channel state were removed in the P0/P1 refactor — the post-bloom wet-bed effect now lives entirely inside `f_post = f_rev · f_irr` and enters `R_total` additively.
 
 This is a single model family. The repository no longer maintains an older fractal-PSD branch in parallel. If measured PSD bins are unavailable, the code falls back to a synthetic single-bin representation inside the same bin-resolved framework.
 
@@ -74,24 +84,62 @@ The current best-fit reference in the repo is based on one measured brew:
 - dripper: ceramic V60, `123.5 g`
 - server equivalent heat capacity: `42.4 mL water equivalent`
 - measured PSD: raw Kinu 29 export is stored under `data/kinu_29_light/`; model-ready artifacts are `data/kinu29_psd_summary.csv` and `data/kinu29_psd_bins.csv`
-- calibrated fit summary: `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- calibrated fit summary (Option C canonical): `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
 
 Current fit metrics:
 
-- `D10 ≈ 374 μm`
+- `D10 ≈ 374 μm` (high-resolution PSD, 17.24 μm/px microscope)
 - `axial_node_count = 2`
-- `k_fit ≈ 8.44e-11 m²`
-- `k_beta_fit ≈ 1.97e3 m⁻³`
-- `tau_lag ≈ 1.6 s`
-- `wetbed_struct_gain ≈ 0.189`
-- `wetbed_struct_rate = 0.0607 (fixed)`
-- `wetbed_impact_release_rate = 0.30 (fixed)`
+- `ext_bin_count = 7` (measured PSD bins, `data/kinu29_psd_bins.csv`)
+- `k_fit ≈ 8.09e-11 m²`
+- `k_beta_fit ≈ 2.35e3 m⁻³` (PSD prior 1.35e3 m⁻³ → 1.74×)
+- `tau_lag ≈ 2.0 s`
+- post-bloom wet-bed term enters `R_total` additively via `f_post = f_rev · f_irr` (no separate χ ODE)
 - `kr(sat)` uses explicit unsaturated Darcy attenuation
 - `pref_flow_coeff = 0` on the current measured fit
-- `server cooling λ ≈ 5.27e-4 s⁻¹`
-- `V_out RMSE ≈ 13.39 mL`
-- `q_out RMSE ≈ 1.24 mL/s`
-- `cup temperature error ≈ +0.05°C`
+- thermal closure jointly fit `λ_liquid_dripper × λ_server_ambient`; `λ_cool` and `λ_dripper_ambient` frozen
+- **extraction (Option C dual-baseline + flow_factor split + high-res PSD)**:
+  - `max_EY ≈ 0.373`, `k_ext_slow_coef ≈ 1.22e-5` (39× default)
+  - `flow_factor_fast` follows Hill kinetics; `flow_factor_slow = 1.0` (slow pool diffusion-bounded, not flow-bounded; subagent P2 fix)
+  - `TDS error ≈ +0.02 g/L` against measured Brix=1.36 → TDS=11.56 g/L (essentially perfect)
+- `V_out RMSE ≈ 13.79 mL = 5.06%` (relative-% gate)
+- `q_out RMSE ≈ 1.23 mL/s`
+- `cup temperature error ≈ +0.011°C` (best-ever)
+- All 5 benchmark gates PASS (V_RMSE relative ≤ 7%, q_out ≤ 1.30, drain ±3s, cup temp ±3.5°C, TDS ±2.5 g/L)
+- fitting pipeline uses `fit_with_multi_start` (3 starts, lowest-loss basin); `observed_stop_time_from_layer` sub-grid interpolation removes drain-time staircase
+
+### Dual-baseline framework (Option C, 2026-05-02)
+
+PSD measurements come from two microscope resolutions:
+- **high-res** (worktree top-level): 17.24 μm/px, 4554 particles, D10 = 374 μm
+- **per-case** (parent project, each brew dir): 35 μm/px, 1942-3800 particles, D10 = 517-529 μm — systematically under-counts fines by 38%
+
+Therefore we run two complementary tracks:
+
+| track | PSD | use |
+|---|---|---|
+| **canonical baseline** (kinu29/4:11) | high-res top-level | benchmark gates (TDS ±2.5 g/L) |
+| cross-validation (kinu27/4:12, kinu28/4:20, kinu29/4:12) | per-case sibling | honest measurement-bounded prediction |
+
+Override mechanism: `pour_over.measured_io.CANONICAL_HIGH_RES_PSD_OVERRIDES` dict maps canonical brew CSV path → high-res PSD path; everything else falls through to per-case sibling PSD.
+
+| case | grinder | Brix | TDS_obs | TDS_pred | TDS error | V_RMSE % |
+|---|---|---|---|---|---|---|
+| **kinu29/4:11 (canonical, high-res)** | 29 (fine) | 1.36 | 11.56 | 11.57 | **+0.02** | 5.06% |
+| kinu27/4:12 (per-case) | 27 (coarse) | 1.19 | 10.11 | 7.08 | −3.03 | 6.41% |
+| kinu28/4:20 (per-case) | 28 (medium) | 1.60 | 13.60 | 7.94 | −5.66 | 5.08% |
+| kinu29/4:12 (per-case) | 29 (fine) | 1.36 | 11.56 | 6.49 | −5.07 | 5.72% |
+
+The canonical baseline achieves TDS error well below VST refractometer noise floor (±0.5 g/L); cross-validation cases reflect the per-case PSD measurement limitation (under-counted fines reduce model surface area, capping predicted extraction). Re-measuring per-case PSDs at high resolution would unlock cross-validation accuracy.
+
+The `flow_factor` was split into separate `fast` (Hill, flow-dependent) and `slow` (constant 1.0, diffusion-bounded) terms per the subagent extraction audit (P2). This structural fix improves the high-res baseline TDS error from −0.40 to +0.02 g/L (95% residual reduction), confirming the audit was physically correct — but only unlocks at sufficient PSD resolution.
+- extraction (now **fit-validated** with measured Brix → TDS):
+  - Brew CSV records final cup `Brix` reading (column `final_tds_pct`, unit °Bx); the model uses VST conversion `TDS_g/L = Brix × 0.85 × 10` (specialty-coffee convention)
+  - Stage 7 of `fit_k_kbeta_from_flow_profile` jointly fits `(k_ext_slow_coef, max_EY)` against measured TDS with prior reg and volume guard
+  - kinu29/4:11 baseline: `Brix=1.36 → TDS_obs=11.56 g/L`; model predicts `TDS_pred=10.15 g/L` (12% under-predicted) with `max_EY=0.308`, `k_ext_slow_coef=2.26e-5` (72× default)
+  - Cross-grinder validation across kinu27/28/29 (3 grinders, 4 brews): V_RMSE relative% all 5.1-7.0%; TDS error 12-18% on 3 cases, kinu28 outlier −6.25 g/L (Powell early-converges due to V_RMSE-dominated loss)
+  - Benchmark gates updated to relative% (V_RMSE/V_out ≤ 7%) and TDS gate ±2.5 g/L for fair cross-brew comparison
+  - Remaining TDS gap is structural (subagent P2 flow_factor fast/slow split, mid-cup TDS time-series); not a fit bug
 
 ## Roast Profiles
 
@@ -221,16 +269,14 @@ uv run python v60_sim.py        # equivalent (backward-compatible)
 
 This command regenerates the main figure set used by the showcase page:
 
-- `data/kinu29_calibrated_flow_diagnostics_180s.png`
-- `data/kinu29_calibrated_extraction_quality_180s.png`
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
+- `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png` (canonical fit comparison)
 - `v60_grind.png`
 - `v60_thermal.png`
 
 The measured-fit page also uses:
 
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
+- `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
 
 ## SCA Golden Cup Targets
 

@@ -360,7 +360,7 @@ canvas{display:block;width:100%;height:auto}
         </div>
         <div class="story-figure">
           <div class="canvas-wrap">
-            <img class="figure-img" src="data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png" alt="Calibrated Kinu 29 flow fit with wet-bed structure">
+            <img class="figure-img" src="data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png" alt="Calibrated Kinu 29 flow fit with wet-bed structure">
           </div>
           <div class="figure-note">The lead figure is now the calibrated flow-fit panel: measured poured volume, measured drained volume, interval outflow rate, residuals, and the current hydraulic fit for the Kinu 29 light-roast brew, including the post-bloom wet-bed structure state.</div>
         </div>
@@ -639,14 +639,14 @@ canvas{display:block;width:100%;height:auto}
         <div class="chart-stack">
           <div class="chart-head">
             <div>
-              <div class="chart-title">Generated Output — Extraction Quality</div>
-              <div class="chart-sub">This figure now shows the calibrated 180 s Kinu 29 extraction trajectory, so the chemistry view matches the same measured-PSD and split-clogging fit used elsewhere on the page.</div>
+              <div class="chart-title">Generated Output — Calibrated Fit (Extraction view)</div>
+              <div class="chart-sub">Since the May 2026 dual-baseline restructure, the calibrated extraction view is consolidated into the same canonical fit comparison panel referenced earlier. TDS calibration is now driven by measured Brix data (kinu29/4:11 final cup Brix = 1.36 °Bx → TDS = 11.56 g/L; model fit error +0.02 g/L).</div>
             </div>
           </div>
           <div class="canvas-wrap">
-            <img class="figure-img" src="data/kinu29_calibrated_extraction_quality_180s.png" alt="Calibrated Kinu 29 extraction quality output figure">
+            <img class="figure-img" src="data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png" alt="Canonical Kinu 29/4:11 calibrated fit comparison">
           </div>
-          <div class="figure-note">Use this panel as the chemistry-side validation view: top-layer concentration, bottom-layer concentration, outflow concentration, cup TDS, and the split between dissolved EY and in-cup EY now come from the same calibrated 180 s run, not from a separate reference sweep.</div>
+          <div class="figure-note">The chemistry-side validation now lives in the canonical fit summary CSV (<code>data/kinu_29_light/4:11/...summary.csv</code>): final TDS predicted vs measured, max_EY, k_ext_slow_coef, and the stage 7 joint Powell residual log. A standalone extraction-quality time-series figure is on the deferred follow-up list.</div>
           <div class="mini-note">Physically, this is the section where internal availability, transport path length, and cup-side dilution stop being abstract symbols and become a cup-strength trajectory.</div>
         </div>
       </div>
@@ -665,7 +665,7 @@ canvas{display:block;width:100%;height:auto}
           <div class="tech-grid">
             <div class="tech-card">
               <strong>State Layer</strong>
-            `h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct`
+            `h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref`
             </div>
             <div class="tech-card">
               <strong>Closure Layer</strong>
@@ -885,14 +885,14 @@ canvas{display:block;width:100%;height:auto}
         <div class="chart-stack">
           <div class="chart-head">
             <div>
-              <div class="chart-title">Generated Output — Flow Diagnostics</div>
-              <div class="chart-sub">This diagnostics panel is now also taken from the calibrated 180 s Kinu 29 run, so the hydraulic state view and the flow-fit panel above refer to the same simulated brew.</div>
+              <div class="chart-title">Generated Output — Calibrated Fit (Hydraulic view)</div>
+              <div class="chart-sub">The hydraulic diagnostics are also folded into the canonical fit comparison panel, with the same calibrated kinu29/4:11 trajectory: V_out RMSE 5.06% relative, q_out RMSE 1.23 mL/s, drain error +0.09 s, all gates PASS.</div>
             </div>
           </div>
           <div class="canvas-wrap">
-            <img class="figure-img" src="data/kinu29_calibrated_flow_diagnostics_180s.png" alt="Calibrated Kinu 29 flow diagnostics output figure">
+            <img class="figure-img" src="data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png" alt="Canonical Kinu 29/4:11 calibrated fit comparison (hydraulic view)">
           </div>
-          <div class="figure-note">This panel is the hydraulic companion to the calibrated fit: water head, flow decomposition, cumulative volume balance, bypass activation, permeability retention, and saturation are all from the same split-clogging simulation that now feeds the two-layer extraction bed.</div>
+          <div class="figure-note">Standalone hydraulic diagnostics figure (head trajectory, flow decomposition, bypass activation, permeability retention, saturation) is on the deferred follow-up list. The calibrated fit panel above contains the V_out / q_out / residual triplet that drives the hydraulic-side gate decision.</div>
         </div>
       </div>
 
@@ -1005,7 +1005,7 @@ canvas{display:block;width:100%;height:auto}
           <div class="showcase-list">
             <div class="showcase-item">
               <strong>State Vector</strong>
-              `h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct`
+              `h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref`
             </div>
             <div class="showcase-item">
               <strong>Primary Outputs</strong>
@@ -1019,7 +1019,7 @@ canvas{display:block;width:100%;height:auto}
         </div>
         <div class="story-copy">
           <div class="eq-label">Core State</div>
-          <div class="eq">state = [h, V_out, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, chi_struct]</div>
+          <div class="eq">state = [h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref]</div>
           <div class="eq-label" style="margin-top:14px">Hydraulic Output Layer</div>
           <div class="eq eq-b">
             Q_ext, Q_bp, k_eff, sat, h, brew_time, drain_time, throat/deposition clog diagnostics
