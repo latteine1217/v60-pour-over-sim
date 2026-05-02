@@ -84,7 +84,7 @@ The current best-fit reference in the repo is based on one measured brew:
 - dripper: ceramic V60, `123.5 g`
 - server equivalent heat capacity: `42.4 mL water equivalent`
 - measured PSD: raw Kinu 29 export is stored under `data/kinu_29_light/`; model-ready artifacts are `data/kinu29_psd_summary.csv` and `data/kinu29_psd_bins.csv`
-- calibrated fit summary: `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- calibrated fit summary (Option C canonical): `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
 
 Current fit metrics:
 
@@ -269,16 +269,14 @@ uv run python v60_sim.py        # equivalent (backward-compatible)
 
 This command regenerates the main figure set used by the showcase page:
 
-- `data/kinu29_calibrated_flow_diagnostics_180s.png`
-- `data/kinu29_calibrated_extraction_quality_180s.png`
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
+- `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png` (canonical fit comparison)
 - `v60_grind.png`
 - `v60_thermal.png`
 
 The measured-fit page also uses:
 
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
-- `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
+- `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
 
 ## SCA Golden Cup Targets
 

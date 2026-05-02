@@ -294,10 +294,13 @@ class V60Params(V60Constant):
     # 但實際平衡受細胞壁阻力限制，取 150 g/L 作為有效 C_sat
 
     k_ext_coef: float = 6.0e-7
-    # 萃取速率係數 [m³/s]
-    # 校正依據（穩態解析解 + 數值掃描，k=6e-11，Q_ext≈2mL/s）：
-    #   η = k_ext / (k_ext + Q_ext)；k_ext_coef=6.0e-7 → η≈23%，EY≈18.8%，TDS≈13.9g/L
-    #   目標：SCA Golden Cup EY=18–22%，TDS=11.5–14.5g/L → 取 6.0e-7 作為保守下界
+    # DEPRECATED 2026-05-02：原為單一萃取速率係數 [m³/s]，已被 fast/slow 雙 pool 取代。
+    # 主 ODE 路徑（`core.py` rhs）只使用 `k_ext_fast_coef` / `k_ext_slow_coef`（透過
+    # `nw_eta_*` 在 __post_init__ 反推），本欄位**不再進入主萃取計算**。
+    # 仍保留欄位以維持向後相容性（`for_grind` / `for_roast` / 舊版 `fit_two_stage`
+    # / `analysis.sensitivity_analysis` tornado 仍引用），但對 EY/TDS 預測無實質作用。
+    # 改用 `k_ext_fast_coef`、`k_ext_slow_coef` 或（經 stage 7 fit 後）`max_EY` 與
+    # 對應 `nw_eta` derived 值。subagent 萃取審計 deferred 的 rename 任務會徹底移除。
 
     max_EY: float = 0.30
     # 最大萃取率（可溶物佔粉重的比例）
@@ -1688,11 +1691,11 @@ class V60Params(V60Constant):
 
     def k_ext_T(self, T_K: float) -> float:
         """
-        Arrhenius 萃取速率縮放：k_ext(T) = k_ext_0·exp(Ea/R·(1/T_ref - 1/T))
+        DEPRECATED 2026-05-02：legacy 單一 pool Arrhenius 萃取速率縮放。
 
-        Why: 溫度下降 → 分子擴散減弱 → 萃取速率降低；
-             以固定 T_ref（93°C）校準，確保不同 T_brew 的對比有物理意義。
-             k_ext_coef 代表「93°C 下的標準萃取速率」。
+        主 ODE 改用 `k_ext_fast_T` / `k_ext_slow_T`（雙 pool + bin-resolved），此
+        method 已不在主萃取計算中被呼叫。保留僅為相容舊 `fit_two_stage` 流程。
+        新程式碼請使用 fast/slow 版本。
         """
         return self.k_ext_coef * np.exp(
             self.Ea_ext / R_GAS * (1.0 / self.T_ref - 1.0 / T_K)

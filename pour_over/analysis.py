@@ -60,13 +60,16 @@ def sensitivity_analysis(
     base = V60Params()
 
     # 待分析的參數：(顯示名, 欄位名, 基準值, 是否用對數微擾)
+    # NOTE 2026-05-02：`k_ext_coef` 已 deprecated（主 ODE 改用 `k_ext_fast/slow_coef`），
+    # 換成 `k_ext_slow_coef` 作 sensitivity axis（fast pool 通常 100% 耗盡，sensitivity
+    # 集中在 slow pool 的速率）。`k_ext_coef` 對 EY/TDS 已無作用，繼續放會誤導 tornado plot。
     param_specs = [
-        ("k  (permeability)",    "k",             base.k,             True),
-        ("ψ  (bypass coef)",     "psi",           base.psi,           True),
-        ("k_ext  (extract rate)","k_ext_coef",    base.k_ext_coef,    True),
-        ("max_EY",               "max_EY",        base.max_EY,        False),
-        ("T_brew  [K]",          "T_brew",        base.T_brew,        False),
-        ("fast_fraction",        "fast_fraction", base.fast_fraction, False),
+        ("k  (permeability)",        "k",                 base.k,                 True),
+        ("ψ  (bypass coef)",         "psi",               base.psi,               True),
+        ("k_ext_slow  (slow rate)",  "k_ext_slow_coef",   base.k_ext_slow_coef,   True),
+        ("max_EY",                   "max_EY",            base.max_EY,            False),
+        ("T_brew  [K]",              "T_brew",            base.T_brew,            False),
+        ("fast_fraction",            "fast_fraction",     base.fast_fraction,     False),
         ("Ea_slow  [J/mol]",     "Ea_slow",       base.Ea_slow,       False),
     ]
 

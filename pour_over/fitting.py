@@ -1503,29 +1503,32 @@ def fit_brew_params(
     verbose: bool = True,
 ) -> tuple["V60Params", dict]:
     """
-    兩階段參數擬合（因果解耦）。
+    DEPRECATED 2026-05-02：legacy 兩階段參數擬合。
 
     What:
       Stage 1 — 從 V_out(t) 觀測序列擬合流體參數 (k, psi)。
       Stage 2 — 從最終杯中 TDS 擬合萃取參數 (k_ext_coef, max_EY)。
 
-    Why:
-      流體動力學（k, psi）決定 V_out(t)，且與化學無關；
-      化學（k_ext_coef, max_EY）在流體解已知後才能被識別。
-      解耦使優化問題維度各半，避免高維非凸陷阱。
+    Status:
+      此函式仍動 `k_ext_coef`（已被棄用），但主 ODE 路徑改用 `k_ext_fast_coef` /
+      `k_ext_slow_coef`，因此本流程的 stage 2 已**對 EY/TDS 預測無實質作用**。
+      新程式碼應使用 `fit_k_kbeta_from_flow_profile`（含 measured Brix → TDS
+      stage 7 + multi-start wrapper）。
 
-    Args:
-        t_obs          : 觀測時間戳 [s]，shape (N,)
-        V_out_obs_ml   : 對應時刻的累積出液量 [mL]，shape (N,)
-        TDS_final_gl   : 最終杯中 TDS 量測值 [g/L]
-        protocol       : 注水協議
-        params_init    : 初始猜測（None → 使用預設值）
-        verbose        : 是否印出擬合過程
-
-    Returns:
-        (fitted_params, info_dict)
-        info_dict keys: stage1_res, stage2_res, TDS_pred, EY_pred
+    Why kept:
+      AGENTS.md §2「能刪掉的程式碼才是好設計」與 backward compat 之間取折衷：
+      留作 historical reference 與 reduced-order single-pool baseline 對照工具。
+      下次萃取線整理時將與 `k_ext_coef` 一同移除。
     """
+    import warnings
+    warnings.warn(
+        "fit_brew_params is deprecated since 2026-05-02; use "
+        "fit_k_kbeta_from_flow_profile (multi-start + stage 7 TDS fit) instead. "
+        "This legacy two-stage fit operates on the deprecated single-pool "
+        "k_ext_coef which is no longer in the main extraction ODE path.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if params_init is None:
         params_init = V60Params()
 
