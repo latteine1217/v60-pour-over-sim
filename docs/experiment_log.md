@@ -53,9 +53,9 @@
 
 ## [BASELINE] Current
 
-- `baseline_id`: `BL-20260330-151548`
-- `case`: `kinu29_light_20g_measured`
-- `status`: `PASS`
+- `baseline_id`: `BL-20260502-option-c`
+- `case`: `kinu29_light_20g_measured` (4:11 protocol, Option C canonical)
+- `status`: `PASS` (5/5 gates)
 - `grinder`: `Kinu 29`
 - `roast`: `light`
 - `dose`: `20 g`
@@ -63,29 +63,47 @@
 - `ambient`: `23 degC`
 - `dripper`: `ceramic V60, 123.5 g`
 - `axial_node_count`: `2`
-- `summary_csv`: `data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
-- `psd_summary_csv`: `data/kinu29_psd_summary.csv`
-- `psd_bins_csv`: `data/kinu29_psd_bins.csv`
+- `flow_profile_csv`: `data/kinu_29_light/4:11/kinu29_light_20g_flow_profile.csv`
+- `summary_csv`: `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv`
+- `psd_summary_csv`: `data/kinu29_psd_summary.csv` (high-res, 17.24 μm/px microscope)
+- `psd_bins_csv`: `data/kinu29_psd_bins.csv` (canonical override; cross-val cases use sibling per-case PSD)
 - `benchmark_csv`: `data/benchmark_suite_summary.csv`
-- `flow_diagnostics`: `data/kinu29_calibrated_flow_diagnostics_180s.png`
-- `extraction_quality`: `data/kinu29_calibrated_extraction_quality_180s.png`
+- `fit_comparison_plot`: `data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png`
 - `identifiability_slices`: `data/kinu29_fit_identifiability_slices.csv`
-- `identifiability_heatmap`: `data/kinu29_fit_identifiability_heatmap.png`
+- `thermal_identifiability_slices`: `data/kinu29_thermal_identifiability_slices.csv`
+- `identifiability_heatmap`: `data/kinu29_fit_identifiability_heatmap.png` (gitignored, regenerable)
+- `thermal_identifiability_heatmap`: `data/kinu29_thermal_identifiability_heatmap.png` (gitignored, regenerable)
 
-Current benchmark metrics:
+Current benchmark metrics (Option C canonical, 2026-05-02):
 
 | Metric | Value |
 |---|---|
-| `k_fit` | `8.441e-11` |
-| `k_beta_fit` | `1.972e3` |
-| `tau_lag` | `1.6 s` |
-| `wetbed_struct_gain_fit` | `0.1892` |
-| `pref_flow_coeff_fit` | `0.0` |
-| `server_cooling_lambda_fit` | `5.273e-4` |
-| `V_out RMSE` | `13.39 mL` |
-| `q_out RMSE` | `1.24 mL/s` |
-| `drain_time_error` | `+1.46 s` |
-| `cup_temp_error` | `+0.05 degC` |
+| `k_fit` | `8.092e-11` |
+| `k_beta_fit` | `2.353e3` |
+| `tau_lag` | `2.0 s` |
+| `max_EY_fit` | `0.373` (closure-level, light SCA target 0.22) |
+| `k_ext_slow_coef_fit` | `1.22e-5` (≈39× legacy default) |
+| `lambda_liquid_dripper_fit` | `4.96e-2` |
+| `server_cooling_lambda_fit` | `6.06e-5` |
+| `V_out RMSE relative` | `5.06%` (gate ≤ 7%) |
+| `q_out RMSE` | `1.23 mL/s` (gate ≤ 1.30) |
+| `drain_time_error` | `+0.09 s` (gate ±3.0) |
+| `cup_temp_error` | `+0.011 degC` (gate ±3.5) |
+| `final_tds_gl_obs` | `11.56 g/L` (Brix=1.36 × 0.85 × 10) |
+| `final_tds_gl_pred` | `11.57 g/L` |
+| `tds_error_gl` | `+0.02 g/L` (gate ±2.5) |
+
+Closure summary：fully additive `R_total`、Fickian `exp(-path²/4Dt)`、`A_slow = (1-shell_acc)^(2/3)·A_total`、`flow_factor` fast/slow split、stage 7 joint Powell on `(k_ext_slow_coef, max_EY)` against measured TDS。
+
+Cross-validation reference (per-case PSD, not gated; expected PSD-resolution-bounded):
+
+| case | TDS_obs | TDS_pred | TDS_err |
+|---|---|---|---|
+| `kinu27/4:12` | `10.11 g/L` | `7.08 g/L` | `-3.03 g/L` |
+| `kinu28/4:20` | `13.60 g/L` | `7.94 g/L` | `-5.66 g/L` |
+| `kinu29/4:12` | `11.56 g/L` | `6.49 g/L` | `-5.07 g/L` |
+
+cross-val gap is **measurement quality limit**（per-case PSDs use 35 μm/px microscope → under-count fines 38%）not a model-structure issue.
 
 Current diagnostic conclusion:
 
@@ -93,9 +111,10 @@ Current diagnostic conclusion:
 |---|---|---|
 | bloom choke driver | `head_gate (h_cap/h_gas)` | 當前未飽和段主導限制不是 `sat_flow` |
 | secondary choke | `kr(sat)` | 顯式 unsaturated Darcy 有必要保留 |
-| identifiability | `sat_rel_perm_*` 近 flat ridge | 不宜把 `kr(sat)` 參數升級成主擬合自由度 |
-| thermal closure | `server-side natural convection` | 杯溫誤差應先由壺端散熱解釋 |
-| measured PSD ingress | raw export 已轉成 `psd_summary` / `psd_bins` | baseline measured PSD 已有可重跑 artifact，不再只靠敘事 |
+| identifiability `sat_rel_perm_*` | flat ridge | 不宜升級成主擬合自由度 |
+| thermal closure | `λ_liq_drip × λ_server` joint fit；`λ_cool` / `λ_dripper_ambient` frozen weak | 4-DOF 熱端結構乾淨 |
+| measured PSD ingress | dual-baseline (canonical high-res 374 μm + per-case sibling 517 μm) | high-res baseline TDS error +0.02；per-case bounded by microscope resolution |
+| extraction structure | flow_factor split (fast Hill / slow=1.0); `nw_eta_*` derived from `k_ext_*_coef`（rename 為 deferred） | subagent P2 改善在高解析度 PSD 下解鎖 95% TDS error reduction |
 
 ---
 

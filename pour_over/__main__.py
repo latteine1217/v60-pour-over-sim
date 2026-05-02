@@ -10,8 +10,8 @@ pour_over 套件入口點。
     v60_tds.png         — 萃取品質（床濃度/出口濃度/TDS/EY）
     v60_grind.png       — 三種研磨度綜合對比（流體 + 萃取）
     v60_thermal.png     — 三種水溫熱力學對比
-    data/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png
-                        — 實測流動擬合展示圖（含 wetbed χ 校準）
+    data/kinu_29_light/4:11/kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s.png
+                        — 實測流動擬合展示圖（Option C canonical kinu29/4:11）
 
 CLI 子命令：
     benchmark           — 依序執行 formal fit、benchmark suite、identifiability

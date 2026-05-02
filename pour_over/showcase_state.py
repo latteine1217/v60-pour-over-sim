@@ -56,12 +56,21 @@ def latest_calibrated_params() -> V60Params:
         仍能安全退回 calibrated D10-only baseline。
     """
     bins_csv = data_dir() / "kinu29_psd_bins.csv"
-    summary_csv = data_dir() / "kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
+    # Option C canonical baseline (2026-05-02)：showcase 應與 fit_measured_benchmark
+    # 用同一份 summary（DEFAULT_MEASURED_FLOW_FIT_SUMMARY 路徑），不再讀已 stale 的
+    # worktree 頂層 CSV。AGENTS.md §11「展示基準應優先從最新 calibrated artifact 讀取」。
+    summary_csv = data_dir() / "kinu_29_light" / "4:11" / "kinu29_light_20g_flow_fit_psd_clog_impactrelief_wetbedchi_180s_summary.csv"
     if bins_csv.exists():
         summary = {}
         if summary_csv.exists():
             with summary_csv.open("r", encoding="utf-8", newline="") as f:
                 summary = next(csv.DictReader(f))
+        # Option C canonical fit 同時涵蓋水力 (k, k_beta)、熱端 (λ_liquid_dripper,
+        # λ_server_ambient) 與擴萃 (max_EY, k_ext_slow/fast_coef)。
+        # 若 showcase 只接 k/k_beta，會在 thermal/extraction 圖上靜默退回 default
+        # → 與 README/EXPERIMENT_LOG 公佈的 canonical state 不一致。
+        # Defaults 取自 V60Params field defaults，保留缺欄位時的安全退回。
+        defaults = V60Params()
         return V60Params(
             psd_bins_csv_path=str(bins_csv),
             D10_measured_m=374.2e-6,
@@ -74,6 +83,11 @@ def latest_calibrated_params() -> V60Params:
             pref_flow_coeff=float(summary.get("pref_flow_coeff_fit", 0.0)),
             pref_flow_open_rate=float(summary.get("pref_flow_open_rate_fixed", summary.get("pref_flow_open_rate_fit", 0.0))),
             pref_flow_tau_decay=float(summary.get("pref_flow_tau_decay_fixed", summary.get("pref_flow_tau_decay_fit", 5.0))),
+            lambda_liquid_dripper=float(summary.get("lambda_liquid_dripper_fit", defaults.lambda_liquid_dripper)),
+            lambda_server_ambient=float(summary.get("server_cooling_lambda_fit", defaults.lambda_server_ambient)),
+            max_EY=float(summary.get("max_EY_fit", defaults.max_EY)),
+            k_ext_slow_coef=float(summary.get("k_ext_slow_coef_fit", defaults.k_ext_slow_coef)),
+            k_ext_fast_coef=float(summary.get("k_ext_fast_coef_fit", defaults.k_ext_fast_coef)),
         )
     return V60Params()
 
