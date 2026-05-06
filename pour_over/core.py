@@ -429,6 +429,21 @@ def simulate_brew(
     EY_dissolved_pct = M_dissolved_g * _ey_scale
     EY_pct           = EY_cup_pct
 
+    # 守恆審計：已溶出 = 入杯 + 床內液相 inventory。
+    # What: 用各 axial layer × bin 的瞬時濃度 × layer 液量推得床內 solute 庫存，
+    #       再算出 mass balance residual（理論上應 ≈ 0）。
+    # Why: 暴露 solute mass balance 殘差後，後續若再動 closure（例如萃取或對流項）
+    #      可立即被回歸測試擋下，避免把漏帳偷塞進 phantom dilution。
+    V_liq_layer_const = np.maximum(
+        params.V_liquid * layer_frac,
+        params.V_liquid * 0.05 / max(n_layers, 1),
+    )
+    M_liquid_inventory_g = np.sum(
+        (C_fast_layers + C_slow_layers) * V_liq_layer_const[:, None, None],
+        axis=(0, 1),
+    ) * 1e3
+    M_balance_residual_g = M_dissolved_g - M_extracted_g - M_liquid_inventory_g
+
     # 沖煮時間（最後一注結束後，水柱高度 = 粉層高度 的時刻）
     # 在現有集總幾何中，h 直接代表相對濾杯出口的液柱高度；
     # 因此以 h <= h_bed 作為可操作的工程定義。
@@ -516,6 +531,8 @@ def simulate_brew(
         M_slow_g         = M_slow,
         M_extracted_g    = M_extracted_g,
         M_dissolved_g    = M_dissolved_g,
+        M_liquid_inventory_g = M_liquid_inventory_g,
+        M_balance_residual_g = M_balance_residual_g,
         TDS_gl           = TDS_gl,
         TDS_fast_gl      = TDS_fast_gl,
         TDS_slow_gl      = TDS_slow_gl,
