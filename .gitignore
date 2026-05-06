@@ -16,6 +16,7 @@ build/
 !v60_tds.png
 !v60_grind.png
 !v60_thermal.png
+!v60_multi_ode_coupling.png
 
 # 本地量測媒體
 # 保留 raw CSV 與 model-ready PSD CSV；忽略大型照片與 PDF 來源媒體。

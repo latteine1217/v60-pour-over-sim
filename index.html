@@ -202,6 +202,8 @@ canvas{display:block;width:100%;height:auto}
 .chart-title{font-family:var(--font-mono);font-size:10px;color:var(--text-dim);letter-spacing:0.12em;text-transform:uppercase}
 .chart-sub{font-size:12px;line-height:1.7;color:var(--text-mid);max-width:420px;margin-top:7px}
 .figure-img{display:block;width:100%;height:auto}
+.paper-figure{background:#fff;border:1px solid var(--border);border-radius:4px;overflow:hidden}
+.paper-figure .figure-img{background:#fff}
 .figure-note{font-size:12px;line-height:1.8;color:var(--text-mid)}
 .eyebrow{font-family:var(--font-mono);font-size:9px;letter-spacing:0.16em;text-transform:uppercase;color:var(--text-dim);margin-bottom:10px}
 .showcase-shell{display:grid;grid-template-columns:minmax(0,0.9fr) minmax(0,1.1fr);gap:24px;align-items:center}
@@ -659,170 +661,28 @@ canvas{display:block;width:100%;height:auto}
     <div class="section-label">03 &nbsp; System Map</div>
     <div class="panel section-panel">
       <div class="story-copy" style="margin-bottom:16px">
-        <div class="eyebrow">Model Architecture</div>
-        <div class="showcase-title" style="font-size:33px">One state trajectory, multiple technical surfaces.</div>
-          <div class="showcase-text">The simulator is built so that flow, thermal, and extraction outputs are all projections of the same coupled ODE state. The difference now is that the extraction block is no longer one pair of lumped pools: the hydraulic state couples to a bin-resolved PSD representation.</div>
-          <div class="tech-grid">
-            <div class="tech-card">
-              <strong>State Layer</strong>
-            `h, V_out, V_bed, V_poured, sat, {C_fast,i, M_fast,i, C_slow,i, M_slow,i}, T, T_dripper, xi_pref`
-            </div>
-            <div class="tech-card">
-              <strong>Closure Layer</strong>
-            Darcy flow, split clogging, bypass activation, wet-bed capillary head, bin-resolved Noyes-Whitney transport, and two-node thermal coupling.
-            </div>
-            <div class="tech-card">
-              <strong>Output Layer</strong>
-            Brew time, drain time, TDS, in-cup EY, dissolved EY, measured D10 diagnostics, and fast/slow cup balance.
-            </div>
+        <div class="eyebrow">Coupled Physics Architecture</div>
+        <div class="showcase-title" style="font-size:33px">Hydraulic, thermal, and extraction ODEs share one physical trajectory.</div>
+        <div class="showcase-text">The model is organized around coupled state families, not independent post-hoc fits. Flow controls heat capacity, advection, residence time, and extraction transfer; temperature feeds back through viscosity, capillary wetting, diffusion, and Arrhenius kinetics; measured PSD enters both permeability/clogging and bin-resolved extraction geometry.</div>
+        <div class="tech-grid">
+          <div class="tech-card">
+            <strong>Hydraulic ODEs</strong>
+            `h`, `V_out`, `V_bed`, `V_liq`, and `sat` evolve through Darcy flow, capillary gates, unsaturated `kr(sat)`, clogging, and channel-flow splitting.
           </div>
+          <div class="tech-card">
+            <strong>Thermal ODEs</strong>
+            Slurry node `T` and dripper node `T_dripper` exchange energy via inflow advection, liquid-dripper coupling (`λ_liquid_dripper`), and ambient loss (`λ_dripper_ambient`); the cup-side observation layer adds vessel heat capacity and `λ_server_ambient` cooling.
+          </div>
+          <div class="tech-card">
+            <strong>Extraction ODEs</strong>
+            Fast and slow solute states evolve per PSD bin and axial CSTR layer, with `q_bed`, thermal history, and particle geometry coupled into the transfer rates.
+          </div>
+        </div>
       </div>
-    <div class="panel" style="padding:28px;background:var(--surface2);border:1px solid var(--border)">
-      <svg viewBox="0 0 1060 300" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block">
-        <defs>
-          <marker id="arr" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4a5470"/>
-          </marker>
-          <marker id="arr-c" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4af0c4"/>
-          </marker>
-          <marker id="arr-b" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#4a8ff0"/>
-          </marker>
-          <marker id="arr-p" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#a24af0"/>
-          </marker>
-          <marker id="arr-a" markerWidth="7" markerHeight="7" refX="4" refY="3.5" orient="auto">
-            <path d="M0,0 L7,3.5 L0,7 Z" fill="#f0a24a"/>
-          </marker>
-        </defs>
-
-        <!--
-          Layout (left→right causal flow):
-          Col 1 (x~67):  V_poured  — protocol input
-          Col 2 (x~245): h (top), V_out (bottom)  — fluid state
-          Col 3 (x~432): T  — thermal hub
-          Col 4 (x~612): C_fast (top), M_fast (bottom)  — fast extraction pair
-          Col 5 (x~787): C_slow (top), M_slow (bottom)  — slow extraction pair
-          Col 6 (x~962): TDS (top), EY (bottom)  — derived outputs
-          h→C arcs routed above all nodes (y<55) to avoid crossings with T
-        -->
-
-        <!-- ── Col 1: Protocol input ── -->
-        <rect x="10" y="90" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
-        <text x="67" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">V_poured</text>
-        <text x="67" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">cumul. input</text>
-
-        <!-- ── Col 2: Fluid state ── -->
-        <rect x="195" y="90" width="100" height="46" rx="2" fill="#111318" stroke="#4af0c4" stroke-width="1.2"/>
-        <text x="245" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600" fill="#4af0c4">h</text>
-        <text x="245" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">water level</text>
-
-        <rect x="195" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
-        <text x="252" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">V_out</text>
-        <text x="252" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">cumul. output</text>
-
-        <!-- ── Col 3: Thermal hub ── -->
-        <rect x="382" y="128" width="100" height="46" rx="2" fill="#111318" stroke="#f0a24a" stroke-width="1.2"/>
-        <text x="432" y="155" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="13" font-weight="600" fill="#f0a24a">T</text>
-        <text x="432" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">temperature</text>
-
-        <!-- ── Col 4: Fast extraction pair ── -->
-        <rect x="555" y="57" width="115" height="46" rx="2" fill="#111318" stroke="#4a8ff0" stroke-width="1.2"/>
-        <text x="612" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4a8ff0">C_fast</text>
-        <text x="612" y="97" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">acid/sweet [g/L]</text>
-
-        <rect x="555" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#4af0c4" stroke-width="1.2"/>
-        <text x="612" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#4af0c4">M_fast</text>
-        <text x="612" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid fast [g]</text>
-
-        <!-- ── Col 5: Slow extraction pair ── -->
-        <rect x="730" y="57" width="115" height="46" rx="2" fill="#111318" stroke="#a24af0" stroke-width="1.2"/>
-        <text x="787" y="84" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#a24af0">C_slow</text>
-        <text x="787" y="97" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">bitter/astringent</text>
-
-        <rect x="730" y="192" width="115" height="46" rx="2" fill="#111318" stroke="#a24af0" stroke-width="1.2"/>
-        <text x="787" y="219" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" font-weight="600" fill="#a24af0">M_slow</text>
-        <text x="787" y="232" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid slow [g]</text>
-
-        <!-- ── Col 6: Derived outputs ── -->
-        <rect x="912" y="90" width="100" height="46" rx="2" fill="#0d0f14" stroke="#2e3550" stroke-width="1"/>
-        <text x="962" y="117" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#8090b0">TDS</text>
-        <text x="962" y="130" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">g/L in cup</text>
-
-        <rect x="912" y="185" width="100" height="46" rx="2" fill="#0d0f14" stroke="#2e3550" stroke-width="1"/>
-        <text x="962" y="212" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="11" fill="#8090b0">EY %</text>
-        <text x="962" y="225" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">extraction yield</text>
-
-        <!-- ══ EDGES ══ -->
-
-        <!-- V_poured → h (Q_in protocol input) -->
-        <line x1="125" y1="113" x2="195" y2="113" stroke="#4a8ff0" stroke-width="1.2" marker-end="url(#arr-b)"/>
-        <text x="160" y="108" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a8ff0">Q_in</text>
-
-        <!-- V_poured → h (bloom sat → k_eff, secondary) -->
-        <path d="M 125,130 Q 160,150 195,130" stroke="#4a8ff0" stroke-width="0.8" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
-        <text x="158" y="151" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">sat</text>
-
-        <!-- h → V_out (Q_ext accumulation, vertical) -->
-        <line x1="245" y1="136" x2="252" y2="192" stroke="#4a8ff0" stroke-width="1.2" marker-end="url(#arr-b)"/>
-        <text x="265" y="165" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a8ff0">Q_ext</text>
-
-        <!-- V_out → h (β·clog feedback, left arc) -->
-        <path d="M 195,215 C 142,215 142,113 195,113" stroke="#4a8ff0" stroke-width="0.9" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-c)"/>
-        <text x="126" y="168" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">β·clog</text>
-
-        <!-- h → C_fast (top arc, above all nodes) -->
-        <path d="M 295,104 Q 500,12 612,57" stroke="#4af0c4" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr-b)"/>
-
-        <!-- h → C_slow (higher top arc) -->
-        <path d="M 295,108 Q 620,8 787,57" stroke="#4af0c4" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#arr-p)"/>
-
-        <!-- Arc label shared -->
-        <text x="510" y="22" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4af0c4">Q_ext / dilution</text>
-
-        <!-- T → h (μ(T) affects flow rate, left arc) -->
-        <path d="M 382,145 Q 340,90 295,113" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-c)"/>
-        <text x="320" y="85" text-anchor="middle" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f0a24a">μ(T)→Q</text>
-
-        <!-- T → C_fast (Arrhenius k_ext) -->
-        <path d="M 482,148 Q 520,120 555,100" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
-        <text x="504" y="117" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#f0a24a">k_ext(T)</text>
-
-        <!-- T → C_slow -->
-        <path d="M 482,151 Q 606,168 730,100" stroke="#f0a24a" stroke-width="1" fill="none" stroke-dasharray="3,3" marker-end="url(#arr-p)"/>
-
-        <!-- Newton cooling input to T (from below) -->
-        <line x1="432" y1="238" x2="432" y2="174" stroke="#4a5470" stroke-width="0.8" stroke-dasharray="2,3" marker-end="url(#arr-a)"/>
-        <text x="445" y="248" font-family="IBM Plex Mono,monospace" font-size="7.5" fill="#4a5470">T_amb</text>
-
-        <!-- C_fast ↔ M_fast (depletion coupling) -->
-        <line x1="622" y1="103" x2="622" y2="192" stroke="#4a8ff0" stroke-width="1" marker-end="url(#arr-c)"/>
-        <line x1="602" y1="192" x2="602" y2="103" stroke="#4af0c4" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arr-b)"/>
-
-        <!-- C_slow ↔ M_slow -->
-        <line x1="797" y1="103" x2="797" y2="192" stroke="#a24af0" stroke-width="1" marker-end="url(#arr-p)"/>
-        <line x1="777" y1="192" x2="777" y2="103" stroke="#a24af0" stroke-width="1" stroke-dasharray="3,3" marker-end="url(#arr-p)"/>
-
-        <!-- C_fast → TDS -->
-        <path d="M 670,80 Q 791,60 912,113" stroke="#4a5470" stroke-width="1" fill="none" marker-end="url(#arr)"/>
-
-        <!-- C_slow → TDS -->
-        <path d="M 845,78 Q 900,64 962,90" stroke="#4a5470" stroke-width="1" fill="none" marker-end="url(#arr)"/>
-
-        <!-- TDS → EY -->
-        <line x1="962" y1="136" x2="962" y2="185" stroke="#4a5470" stroke-width="0.9" marker-end="url(#arr)"/>
-
-        <!-- Legend -->
-        <line x1="20"  y1="278" x2="50"  y2="278" stroke="#4af0c4" stroke-width="1" stroke-dasharray="4,3"/>
-        <text x="56"  y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">fluid coupling</text>
-        <line x1="155" y1="278" x2="185" y2="278" stroke="#f0a24a" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="191" y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">thermal coupling</text>
-        <line x1="310" y1="278" x2="340" y2="278" stroke="#a24af0" stroke-width="1" stroke-dasharray="3,3"/>
-        <text x="346" y="282" font-family="IBM Plex Mono,monospace" font-size="8" fill="#4a5470">solid↔pore</text>
-      </svg>
-    </div>
-    <div class="mini-note" style="margin-top:14px">The left-to-right map reads as protocol input → hydraulic state → thermal state → extraction state → cup outputs. That ordering is intentional: it keeps local reasoning possible while preserving the coupled physics.</div>
+      <div class="paper-figure">
+        <img class="figure-img" src="v60_multi_ode_coupling.png" alt="Coupled multi-ODE V60 physical model architecture diagram">
+      </div>
+      <div class="mini-note" style="margin-top:14px">This figure should be read as the model coupling contract: measured inputs stay fixed, hydraulic / thermal / extraction ODEs are integrated together, and fitting or benchmark outputs are projections of the same state trajectory.</div>
     </div>
   </div>
 
@@ -1080,7 +940,9 @@ function animateV60(){
   }, 80);
 }
 
-window.addEventListener('load', animateV60);
+window.addEventListener('load', ()=>{
+  animateV60();
+});
 </script>
 </body>
 </html>
